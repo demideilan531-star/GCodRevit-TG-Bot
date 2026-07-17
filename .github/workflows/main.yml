@@ -1,0 +1,32 @@
+name: Send Telegram Message
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: "Текст сообщения"
+        required: true
+        default: "Тестовое сообщение от GitHub Actions"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  send-message:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send message to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MESSAGE_TEXT: ${{ inputs.message }}
+        run: |
+          response=$(curl --silent --show-error --fail-with-body \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MESSAGE_TEXT}")
+
+          echo "Telegram accepted the message."
