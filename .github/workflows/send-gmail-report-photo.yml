@@ -8,7 +8,7 @@ on:
       - ".github/temp/gmail_report_trigger.txt"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   publish:
@@ -38,7 +38,6 @@ jobs:
           f_body = ImageFont.truetype(regular, 28)
           f_small = ImageFont.truetype(regular, 24)
 
-          # Background gradient
           for y in range(H):
               t = y / H
               r = int(7 + 9*t)
@@ -46,18 +45,15 @@ jobs:
               b = int(31 + 28*t)
               d.line((0, y, W, y), fill=(r, g, b))
 
-          # Header
           d.rounded_rectangle((45, 35, 1155, 175), radius=28, fill='#0d2138', outline='#2a86ff', width=3)
           d.text((85, 58), 'ОТЧЁТ ПО GMAIL', font=f_title, fill='white')
           d.text((88, 132), '19 июля 2026 · 02:03 МСК · последние 65 минут', font=f_sub, fill='#a9c8e8')
 
-          # Main count card
           d.rounded_rectangle((45, 205, 520, 470), radius=28, fill='#0c3153', outline='#3ca6ff', width=3)
           d.text((85, 240), 'НОВЫХ ПИСЕМ', font=f_head, fill='#79c6ff')
           d.text((85, 290), '7', font=f_big, fill='white')
           d.text((235, 355), 'Все письма — технические\nуведомления GitHub', font=f_body, fill='#cfe9ff', spacing=8)
 
-          # Alert card
           d.rounded_rectangle((550, 205, 1155, 470), radius=28, fill='#3a2710', outline='#ffbd3e', width=3)
           d.text((590, 240), '⚠ ВАЖНО', font=f_head, fill='#ffd466')
           alert = 'Все 7 запусков workflow main.yml завершились без выполнения задач: “No jobs were run”.'
@@ -66,7 +62,6 @@ jobs:
               d.text((590, yy), line, font=f_body, fill='white')
               yy += 40
 
-          # Timeline
           d.rounded_rectangle((45, 505, 1155, 1110), radius=28, fill='#0b1828', outline='#36536f', width=2)
           d.text((80, 540), 'СРОЧНЫЕ / ТЕХНИЧЕСКИЕ ПИСЬМА', font=f_head, fill='#ff6767')
           rows = [
@@ -82,12 +77,10 @@ jobs:
               d.text((270, y+36), f'Run failed: main.yml · {sha}', font=f_small, fill='#a9c8e8')
               y += 70
 
-          # Action card
           d.rounded_rectangle((45, 1145, 1155, 1275), radius=25, fill='#17271f', outline='#48c878', width=3)
           d.text((80, 1175), 'ДЕЙСТВИЕ', font=f_head, fill='#72e59a')
           d.text((315, 1178), 'Проверить условия запуска и синтаксис workflow, затем повторить запуск.', font=f_body, fill='white')
 
-          # Footer metrics
           metrics = [('Работа/учёба', '0'), ('Приглашения', '0'), ('Финансы', '0'), ('Безопасность', '0')]
           x = 45
           for label, value in metrics:
@@ -127,12 +120,3 @@ jobs:
             -F "chat_id=${TELEGRAM_CHAT_ID}" \
             -F "photo=@/tmp/gmail_report.png" \
             --form-string "caption=${CAPTION}"
-
-      - name: Record successful delivery
-        run: |
-          printf 'Telegram post delivered successfully at %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" > .github/temp/gmail_report_success.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/temp/gmail_report_success.txt
-          git commit -m "Record Telegram report delivery" || exit 0
-          git push
