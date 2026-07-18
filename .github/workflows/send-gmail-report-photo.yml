@@ -5,10 +5,15 @@ on:
     branches:
       - main
     paths:
-      - ".github/temp/gmail_report_trigger.txt"
+      - "reports/latest.txt"
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: gmail-report-telegram
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -18,105 +23,233 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate report image
+      - name: Generate current report image
         run: |
           python -m pip install --quiet pillow
           cat > /tmp/make_report.py <<'PY'
+          from pathlib import Path
           from PIL import Image, ImageDraw, ImageFont
-          from textwrap import wrap
+          import re
+          import textwrap
 
-          W, H = 1200, 1500
-          img = Image.new('RGB', (W, H), '#07111f')
-          d = ImageDraw.Draw(img)
+          report_path = Path('reports/latest.txt')
+          if not report_path.exists():
+              raise SystemExit('reports/latest.txt was not found')
 
-          regular = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-          bold = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-          f_title = ImageFont.truetype(bold, 72)
-          f_sub = ImageFont.truetype(regular, 34)
-          f_big = ImageFont.truetype(bold, 110)
-          f_head = ImageFont.truetype(bold, 38)
-          f_body = ImageFont.truetype(regular, 28)
-          f_small = ImageFont.truetype(regular, 24)
+          report = report_path.read_text(encoding='utf-8').strip()
+          if not report:
+              report = 'За последний час новых писем нет.'
 
+          regular_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+          bold_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+
+          f_title = ImageFont.truetype(bold_path, 66)
+          f_sub = ImageFont.truetype(regular_path, 29)
+          f_big = ImageFont.truetype(bold_path, 104)
+          f_card = ImageFont.truetype(bold_path, 31)
+          f_head = ImageFont.truetype(bold_path, 30)
+          f_body = ImageFont.truetype(regular_path, 25)
+          f_body_bold = ImageFont.truetype(bold_path, 25)
+          f_small = ImageFont.truetype(regular_path, 21)
+
+          def search(pattern, default='—'):
+              match = re.search(pattern, report, re.IGNORECASE | re.MULTILINE)
+              return match.group(1).strip() if match else default
+
+          checked = search(r'^Проверка Gmail:\s*(.+)$', 'Почасовая проверка Gmail')
+          count_text = search(r'Новых писем(?: за последние \d+ минут)?:\s*(\d+)', '0')
+          try:
+              new_count = int(count_text)
+          except ValueError:
+              new_count = 0
+
+          def metric(pattern):
+              value = search(pattern, '0')
+              found = re.search(r'\d+', value)
+              return found.group(0) if found else '0'
+
+          work_count = metric(r'Ответы по работе/уч[её]бе:\s*([^\n]+)')
+          invite_count = metric(r'Приглашения:\s*([^\n]+)')
+          finance_count = metric(r'Финансовые (?:вопросы|письма):\s*([^\n]+)')
+          security_count = metric(r'Угрозы безопасности:\s*([^\n]+)')
+          one_time_count = metric(r'Одноразовые письма:\s*([^\n]+)')
+          important_count = len(re.findall(r'^\d+\.\s+', report, re.MULTILINE))
+
+          # Turn the report into readable lines for the image.
+          display_lines = []
+          for raw in report.splitlines():
+              raw = raw.rstrip()
+              if raw.startswith('GitHub: отчёт записан'):
+                  continue
+              if not raw:
+                  display_lines.append('')
+                  continue
+              indent = '   ' if raw.startswith(('Тема:', 'Суть:', 'Действие:')) else ''
+              wrapped = textwrap.wrap(
+                  raw,
+                  width=68 if indent else 74,
+                  break_long_words=True,
+                  break_on_hyphens=False,
+              ) or ['']
+              display_lines.extend(indent + line for line in wrapped)
+
+          max_lines = 58
+          if len(display_lines) > max_lines:
+              display_lines = display_lines[:max_lines - 1] + ['… продолжение — в тексте под изображением']
+
+          line_height = 38
+          body_height = max(430, len(display_lines) * line_height + 95)
+          W = 1200
+          H = 650 + body_height + 210
+          H = max(1500, min(H, 3200))
+
+          image = Image.new('RGB', (W, H), '#07111f')
+          draw = ImageDraw.Draw(image)
+
+          # Dark blue gradient background.
           for y in range(H):
-              t = y / H
-              r = int(7 + 9*t)
-              g = int(17 + 16*t)
-              b = int(31 + 28*t)
-              d.line((0, y, W, y), fill=(r, g, b))
+              t = y / max(H - 1, 1)
+              draw.line((0, y, W, y), fill=(7 + int(12*t), 17 + int(18*t), 31 + int(30*t)))
 
-          d.rounded_rectangle((45, 35, 1155, 175), radius=28, fill='#0d2138', outline='#2a86ff', width=3)
-          d.text((85, 58), 'ОТЧЁТ ПО GMAIL', font=f_title, fill='white')
-          d.text((88, 132), '19 июля 2026 · 02:03 МСК · последние 65 минут', font=f_sub, fill='#a9c8e8')
+          # Header.
+          draw.rounded_rectangle((42, 35, 1158, 180), radius=30, fill='#0d2138', outline='#2a86ff', width=3)
+          draw.rounded_rectangle((68, 67, 142, 141), radius=16, fill='#e94545')
+          draw.polygon([(74, 78), (105, 105), (136, 78), (136, 91), (105, 117), (74, 91)], fill='white')
+          draw.text((170, 54), 'ОТЧЁТ ПО GMAIL', font=f_title, fill='white')
+          draw.text((173, 132), checked, font=f_sub, fill='#a9c8e8')
 
-          d.rounded_rectangle((45, 205, 520, 470), radius=28, fill='#0c3153', outline='#3ca6ff', width=3)
-          d.text((85, 240), 'НОВЫХ ПИСЕМ', font=f_head, fill='#79c6ff')
-          d.text((85, 290), '7', font=f_big, fill='white')
-          d.text((235, 355), 'Все письма — технические\nуведомления GitHub', font=f_body, fill='#cfe9ff', spacing=8)
+          # Count card.
+          count_color = '#62dd8b' if new_count == 0 else '#79c6ff'
+          draw.rounded_rectangle((42, 210, 540, 475), radius=28, fill='#0c3153', outline='#3ca6ff', width=3)
+          draw.text((82, 242), 'НОВЫХ ПИСЕМ', font=f_card, fill='#9bd5ff')
+          draw.text((82, 288), str(new_count), font=f_big, fill=count_color)
+          count_note = 'Входящие спокойны' if new_count == 0 else 'за последние 65 минут'
+          draw.text((230, 372), count_note, font=f_body, fill='#d5ebff')
 
-          d.rounded_rectangle((550, 205, 1155, 470), radius=28, fill='#3a2710', outline='#ffbd3e', width=3)
-          d.text((590, 240), '⚠ ВАЖНО', font=f_head, fill='#ffd466')
-          alert = 'Все 7 запусков workflow main.yml завершились без выполнения задач: “No jobs were run”.'
-          yy = 305
-          for line in wrap(alert, 38):
-              d.text((590, yy), line, font=f_body, fill='white')
-              yy += 40
+          # Attention card.
+          if important_count > 0:
+              card_fill, card_outline, card_title = '#3a2118', '#ff6b57', '#ff8d79'
+              card_label = 'ТРЕБУЕТ ВНИМАНИЯ'
+              card_text = f'Важных или технических писем: {important_count}'
+          else:
+              card_fill, card_outline, card_title = '#173024', '#45c777', '#78e5a0'
+              card_label = 'СТАТУС'
+              card_text = 'Срочных действий не требуется'
+          draw.rounded_rectangle((570, 210, 1158, 475), radius=28, fill=card_fill, outline=card_outline, width=3)
+          draw.text((610, 244), card_label, font=f_card, fill=card_title)
+          y_text = 310
+          for line in textwrap.wrap(card_text, width=32):
+              draw.text((610, y_text), line, font=f_body_bold, fill='white')
+              y_text += 40
 
-          d.rounded_rectangle((45, 505, 1155, 1110), radius=28, fill='#0b1828', outline='#36536f', width=2)
-          d.text((80, 540), 'СРОЧНЫЕ / ТЕХНИЧЕСКИЕ ПИСЬМА', font=f_head, fill='#ff6767')
-          rows = [
-              ('01:57', '9e2d59f'), ('01:56', '9032b95'), ('01:50', 'e2b7796'),
-              ('01:49', '69b4b35'), ('01:49', 'f17f67c'), ('01:48', 'b70e449'), ('01:46', '844cb27')
+          # Metric cards.
+          metrics = [
+              ('РАБОТА / УЧЁБА', work_count, '#57c78a'),
+              ('ПРИГЛАШЕНИЯ', invite_count, '#a27aff'),
+              ('ФИНАНСЫ', finance_count, '#ffc24b'),
+              ('БЕЗОПАСНОСТЬ', security_count, '#ff6b62'),
+              ('ОДНОРАЗОВЫЕ', one_time_count, '#59b9ff'),
           ]
-          y = 615
-          for i, (tm, sha) in enumerate(rows, 1):
-              d.ellipse((80, y+3, 120, y+43), fill='#ff5c62')
-              d.text((94, y+9), str(i), font=f_small, fill='white', anchor='mm')
-              d.text((145, y), tm, font=f_body, fill='#d9e8f6')
-              d.text((270, y), 'GitHub notifications', font=f_body, fill='white')
-              d.text((270, y+36), f'Run failed: main.yml · {sha}', font=f_small, fill='#a9c8e8')
-              y += 70
+          x = 42
+          card_w = 211
+          for label, value, accent in metrics:
+              draw.rounded_rectangle((x, 505, x + card_w, 625), radius=21, fill='#0b1d30', outline='#294b69', width=2)
+              draw.text((x + 18, 527), label, font=f_small, fill=accent)
+              draw.text((x + 18, 559), value, font=f_card, fill='white')
+              x += card_w + 13
 
-          d.rounded_rectangle((45, 1145, 1155, 1275), radius=25, fill='#17271f', outline='#48c878', width=3)
-          d.text((80, 1175), 'ДЕЙСТВИЕ', font=f_head, fill='#72e59a')
-          d.text((315, 1178), 'Проверить условия запуска и синтаксис workflow, затем повторить запуск.', font=f_body, fill='white')
+          # Detailed report card.
+          body_top = 655
+          body_bottom = body_top + body_height
+          draw.rounded_rectangle((42, body_top, 1158, body_bottom), radius=28, fill='#0a1727', outline='#36536f', width=2)
+          draw.text((78, body_top + 28), 'ДЕТАЛИ ПРОВЕРКИ', font=f_head, fill='#7dc8ff')
 
-          metrics = [('Работа/учёба', '0'), ('Приглашения', '0'), ('Финансы', '0'), ('Безопасность', '0')]
-          x = 45
-          for label, value in metrics:
-              d.rounded_rectangle((x, 1310, x+255, 1435), radius=22, fill='#0c1f33', outline='#284b6b', width=2)
-              d.text((x+25, 1335), label, font=f_small, fill='#9fc3e3')
-              d.text((x+25, 1370), value, font=f_head, fill='white')
-              x += 275
+          y = body_top + 82
+          for line in display_lines:
+              stripped = line.strip()
+              if not stripped:
+                  y += 17
+                  continue
+              if stripped.isupper() or stripped.startswith(('СРОЧНЫЕ', 'ВАЖНЫЕ')):
+                  font, color = f_body_bold, '#ff7b73'
+              elif re.match(r'^\d+\.', stripped):
+                  font, color = f_body_bold, 'white'
+              elif stripped.startswith('Действие:'):
+                  font, color = f_body_bold, '#72e59a'
+              elif stripped.startswith('Тема:'):
+                  font, color = f_body, '#8dcaff'
+              elif stripped.startswith('Суть:'):
+                  font, color = f_body, '#d4e2ef'
+              else:
+                  font, color = f_body, '#c7d8e8'
+              draw.text((78, y), line, font=font, fill=color)
+              y += line_height
+              if y > body_bottom - 48:
+                  break
 
-          d.text((50, 1460), 'GMAIL MONITOR BOT · отчёты каждый час', font=f_small, fill='#7697b5')
-          img.save('/tmp/gmail_report.png', optimize=True)
+          footer_y = body_bottom + 35
+          draw.rounded_rectangle((42, footer_y, 1158, footer_y + 115), radius=24, fill='#0d2138', outline='#2a86ff', width=2)
+          draw.text((78, footer_y + 26), 'GMAIL MONITOR BOT', font=f_head, fill='white')
+          draw.text((78, footer_y + 68), 'Автоматическая проверка и публикация каждый час', font=f_small, fill='#8fb2d2')
+
+          image.save('/tmp/gmail_report.png', optimize=True)
+
+          if new_count == 0:
+              caption = f'📬 Почасовой отчёт по Gmail\n🕒 {checked}\n\n✅ За последний час новых писем нет.'
+          else:
+              caption = (
+                  f'📬 Почасовой отчёт по Gmail\n'
+                  f'🕒 {checked}\n'
+                  f'📨 Новых писем: {new_count}\n'
+                  f'⚠️ Требуют внимания: {important_count}\n'
+                  f'🗂 Одноразовых: {one_time_count}\n\n'
+                  'Полный отчёт — следующим сообщением.'
+              )
+          Path('/tmp/caption.txt').write_text(caption, encoding='utf-8')
+
+          # Split the full report into Telegram-safe message chunks.
+          chunks = []
+          current = ''
+          for paragraph in report.split('\n\n'):
+              candidate = paragraph if not current else current + '\n\n' + paragraph
+              if len(candidate) <= 3500:
+                  current = candidate
+              else:
+                  if current:
+                      chunks.append(current)
+                  while len(paragraph) > 3500:
+                      chunks.append(paragraph[:3500])
+                      paragraph = paragraph[3500:]
+                  current = paragraph
+          if current:
+              chunks.append(current)
+          if not chunks:
+              chunks = ['За последний час новых писем нет.']
+          for index, chunk in enumerate(chunks, start=1):
+              Path(f'/tmp/gmail_report_chunk_{index:02d}.txt').write_text(chunk, encoding='utf-8')
           PY
           python /tmp/make_report.py
 
-      - name: Send photo to Telegram
+      - name: Send photo and report to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          CAPTION=$(cat <<'EOF'
-          📬 Отчёт по Gmail
-
-          За последние 65 минут получено 7 технических писем от GitHub.
-          Все они сообщают об одной проблеме: workflow main.yml завершился без запуска задач — «No jobs were run».
-
-          🔧 Требуется проверить условия запуска и синтаксис workflow, затем повторить запуск.
-
-          Ответы по работе/учёбе: 0
-          Приглашения: 0
-          Финансовые вопросы: 0
-          Угрозы безопасности: 0
-          EOF
-          )
-
           curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 --max-time 90 \
             --request POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
             -F "chat_id=${TELEGRAM_CHAT_ID}" \
             -F "photo=@/tmp/gmail_report.png" \
-            --form-string "caption=${CAPTION}"
+            --form-string "caption=$(cat /tmp/caption.txt)"
+
+          for chunk in /tmp/gmail_report_chunk_*.txt; do
+            curl --silent --show-error --fail-with-body \
+              --connect-timeout 20 --max-time 90 \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text@${chunk}"
+          done
+
+          echo "Telegram accepted the Gmail report photo and text."
