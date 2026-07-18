@@ -8,6 +8,9 @@ on:
         required: true
         default: "Тестовое сообщение от GitHub Actions"
         type: string
+  push:
+    paths:
+      - ".github/temp/send_photo_trigger.txt"
 
 permissions:
   contents: read
@@ -17,16 +20,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Send message to Telegram
+      - name: Send content to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MESSAGE_TEXT: ${{ inputs.message }}
         run: |
-          response=$(curl --silent --show-error --fail-with-body \
-            --request POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${MESSAGE_TEXT}")
+          if [ "${{ github.event_name }}" = "push" ]; then
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "photo=https://avatars.githubusercontent.com/u/247617988?v=4" \
+              --data-urlencode "caption=Тестовое фото от ChatGPT 📸"
+          else
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${MESSAGE_TEXT}"
+          fi
 
-          echo "Telegram accepted the message."
+          echo "Telegram accepted the request."
