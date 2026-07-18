@@ -20,8 +20,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Send message to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -35,33 +33,28 @@ jobs:
               --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
               --data-urlencode "text=${MESSAGE_TEXT}"
           else
-            base64 -d .github/temp/post_photo.b64 > /tmp/post_photo.jpg
-
             CAPTION=$(cat <<'EOF'
-🌟 День, в котором было всё понемногу
+📬 Отчёт по Gmail
 
-Сегодня получился простой, но очень насыщенный день ✨
+🕒 Проверен последний час
+📨 Новых писем: 0
 
-Сначала я хорошо погулял 🚶‍♂️🌤️ — развеялся, сменил обстановку и немного перезагрузился.
+✅ Срочных писем нет
+💼 Ответов по работе или учёбе нет
+📅 Приглашений нет
+💳 Финансовых вопросов нет
+🔐 Угроз безопасности нет
 
-Потом настал самый вкусный момент дня: горячий брауни с мороженым 🍫🍨🔥 Тёплый шоколад и холодное сливочное мороженое — идеальное сочетание 😋
-
-После сладкого отдыха началась активная часть 💪
-🏐 Волейбол подарил движение и заряд энергии.
-🏓 Настольный теннис добавил скорости, реакции и азарта.
-
-В итоге день получился ярким, вкусным и по-настоящему живым 💛
-
-А что сегодня стало лучшим моментом вашего дня? 👇✨
+🤖 Почта проверяется автоматически каждый час.
 EOF
 )
 
             curl --silent --show-error --fail-with-body \
               --request POST \
               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
-              -F "chat_id=${TELEGRAM_CHAT_ID}" \
-              -F "photo=@/tmp/post_photo.jpg" \
-              --form-string "caption=${CAPTION}"
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "photo=https://picsum.photos/seed/gmail-monitor/1200/800" \
+              --data-urlencode "caption=${CAPTION}"
           fi
 
           echo "Telegram accepted the post."
