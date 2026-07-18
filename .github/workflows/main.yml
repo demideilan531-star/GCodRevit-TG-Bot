@@ -8,6 +8,9 @@ on:
         required: true
         default: "Тестовое сообщение от GitHub Actions"
         type: string
+  push:
+    paths:
+      - ".github/temp/publish_post_trigger.txt"
 
 permissions:
   contents: read
@@ -17,16 +20,67 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Send message to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MESSAGE_TEXT: ${{ inputs.message }}
         run: |
-          response=$(curl --silent --show-error --fail-with-body \
-            --request POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${MESSAGE_TEXT}")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${MESSAGE_TEXT}"
+          else
+            base64 -d .github/temp/post_photo.b64 > /tmp/post_photo.jpg
 
-          echo "Telegram accepted the message."
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+              -F "chat_id=${TELEGRAM_CHAT_ID}" \
+              -F "photo=@/tmp/post_photo.jpg" \
+              --form-string "caption=🌟 День, в котором было всё понемногу"
+
+            POST_TEXT=$(cat <<'EOF'
+🌟 День, в котором было всё понемногу
+
+Сегодня получился простой, но очень насыщенный день ✨
+
+Сначала я хорошо погулял 🚶‍♂️🌤️
+Удалось немного развеяться, сменить обстановку и просто насладиться моментом. Такие прогулки отлично перезагружают голову, возвращают лёгкость и помогают почувствовать, что день проходит не зря.
+
+Потом наступил самый вкусный момент дня — горячий брауни с мороженым 🍫🍨🔥
+Тёплый, мягкий и насыщенно-шоколадный десерт идеально сочетался с холодным сливочным мороженым. Этот контраст вкуса и температуры оказался просто невероятным 😋 Иногда именно такие маленькие радости делают день по-настоящему особенным.
+
+После сладкого отдыха началась активная часть дня 💪
+
+🏐 Волейбол подарил движение, азарт и мощный заряд энергии.
+Пришлось побегать, попрыгать и хорошо включиться в игру.
+
+🏓 А затем был настольный теннис — скорость, реакция, концентрация и весёлое соревнование. Каждая партия заставляла быть внимательнее и двигаться ещё быстрее.
+
+В итоге день получился очень сбалансированным и ярким:
+
+🌿 приятная прогулка
+🍫 вкусный десерт
+🏐 активный волейбол
+🏓 азартный настольный теннис
+😊 хорошее настроение
+
+К вечеру осталась приятная усталость и ощущение, что день прожит вкусно, активно и с удовольствием 💛
+
+А что сегодня стало лучшим моментом вашего дня? 👇✨
+EOF
+)
+
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${POST_TEXT}"
+          fi
+
+          echo "Telegram accepted the post."
