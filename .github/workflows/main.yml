@@ -8,6 +8,9 @@ on:
         required: true
         default: "Тестовое сообщение от GitHub Actions"
         type: string
+  push:
+    paths:
+      - ".github/tg-post-20260719/trigger.txt"
 
 permissions:
   contents: read
@@ -17,16 +20,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Send message to Telegram
+      - uses: actions/checkout@v4
+
+      - name: Send message or photo post to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MESSAGE_TEXT: ${{ inputs.message }}
         run: |
-          response=$(curl --silent --show-error --fail-with-body \
-            --request POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${MESSAGE_TEXT}")
+          set -euo pipefail
 
-          echo "Telegram accepted the message."
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${MESSAGE_TEXT}"
+          else
+            cat \
+              .github/tg-post-20260719/photo.small.part1 \
+              .github/tg-post-20260719/photo.small.part2 \
+              > /tmp/photo.b64
+
+            base64 --decode /tmp/photo.b64 > /tmp/photo.jpg
+            CAPTION="$(cat .github/tg-post-20260719/caption.txt)"
+
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+              -F "chat_id=${TELEGRAM_CHAT_ID}" \
+              -F "photo=@/tmp/photo.jpg" \
+              --form-string "caption=${CAPTION}" \
+              --form-string "parse_mode=HTML"
+          fi
+
+          echo "Telegram accepted the request."
