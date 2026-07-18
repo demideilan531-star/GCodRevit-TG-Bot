@@ -8,9 +8,6 @@ on:
         required: true
         default: "Тестовое сообщение от GitHub Actions"
         type: string
-  push:
-    paths:
-      - ".github/telegram-send-trigger.txt"
 
 permissions:
   contents: read
@@ -24,10 +21,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MANUAL_MESSAGE: ${{ inputs.message }}
+          MESSAGE_TEXT: ${{ inputs.message }}
         run: |
-          MESSAGE_TEXT="${MANUAL_MESSAGE:-Привет! Это сообщение отправлено ChatGPT через GitHub Actions ✅}"
-
           response=$(curl --silent --show-error --fail-with-body \
             --request POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
