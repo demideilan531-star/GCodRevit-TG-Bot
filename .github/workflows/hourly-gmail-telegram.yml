@@ -1,0 +1,96 @@
+name: Hourly Gmail Report to Telegram
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hourly-gmail-report
+  cancel-in-progress: false
+
+jobs:
+  analyze-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pillow
+
+      - name: Validate required secrets
+        env:
+          GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          missing=0
+          for name in GMAIL_EMAIL GMAIL_APP_PASSWORD TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Repository secret ${name} is not configured"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Analyze Gmail and build report assets
+        env:
+          GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_TIMEZONE: Europe/Moscow
+          LOOKBACK_MINUTES: "65"
+          ONE_TIME_LABEL: Одноразовые письма
+        run: python scripts/hourly_gmail_report.py
+
+      - name: Publish one Telegram post with photo and caption
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          response=$(curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 120 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "photo=@/tmp/gmail_report.png" \
+            --form-string "caption=$(cat /tmp/gmail_caption.txt)")
+
+          printf '%s\n' "$response" > /tmp/telegram_response.json
+          if [ "$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')" != "true" ]; then
+            echo "::error::Telegram did not accept the post"
+            cat /tmp/telegram_response.json
+            exit 1
+          fi
+
+          message_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin)["result"]["message_id"])')
+          echo "Telegram accepted the Gmail report. message_id=${message_id}"
+
+      - name: Save latest report and processed-message state
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/latest.txt state/gmail_monitor.json
+          if git diff --cached --quiet; then
+            echo "No report-state changes to commit."
+            exit 0
+          fi
+          git commit -m "Hourly Gmail report $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          git pull --rebase origin main
+          git push origin HEAD:main
