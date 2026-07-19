@@ -1,12 +1,22 @@
-name: Send Telegram Message
+name: Send Telegram Post
 
 on:
   workflow_dispatch:
     inputs:
       message:
-        description: "Текст сообщения"
+        description: "Текст сообщения или подписи"
         required: true
-        default: "Тестовое сообщение от GitHub Actions"
+        default: "Тестовая публикация от GitHub Actions"
+        type: string
+      media_type:
+        description: "Тип публикации: text или video"
+        required: true
+        default: "text"
+        type: string
+      video_base64_path:
+        description: "Путь к base64-файлу MP4 в репозитории"
+        required: false
+        default: ".github/temp/telegram_video.mp4.b64"
         type: string
   push:
 
@@ -16,7 +26,7 @@ permissions:
   statuses: write
 
 jobs:
-  send-message:
+  send-post:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' &&
@@ -24,54 +34,76 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Send post to Telegram and publish verifiable result
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MANUAL_MESSAGE: ${{ inputs.message }}
+          MANUAL_MEDIA_TYPE: ${{ inputs.media_type }}
+          MANUAL_VIDEO_PATH: ${{ inputs.video_base64_path }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -u
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             MESSAGE_TEXT="$MANUAL_MESSAGE"
+            MEDIA_TYPE="$MANUAL_MEDIA_TYPE"
+            VIDEO_B64_PATH="$MANUAL_VIDEO_PATH"
           else
             MESSAGE_TEXT=$(cat <<'POST'
-          ☀️ Сегодняшний день начался очень продуктивно.
+          🎬 Проверяем публикацию видео через GPT и GitHub Actions.
 
-          Сначала я проснулся и вкусно позавтракал — иногда именно такие простые моменты задают настроение на весь день. Потом встретился с мамой, а после поехал работать в офис.
+          Это короткий технический тест: теперь бот должен уметь отправлять в канал не только текст и фотографии, но и настоящий MP4-файл через Telegram Bot API.
 
-          Сегодня занимаюсь особенно интересной задачей: настраиваю автоматические публикации в Telegram с помощью GPT.
-
-          Идея простая: система будет анализировать прогресс проекта, превращать технические изменения в понятные посты и публиковать их через Telegram-бота. Первый важный этап уже готов — связка GitHub Actions → Telegram работает.
-
-          Теперь двигаюсь дальше: хочу, чтобы публикации создавались регулярно и почти без ручной работы.
-
-          Это только начало, но фундамент уже заложен. 🚀
+          Следующий шаг — использовать эту же механику для демонстраций функций GCod Revit. 🚀
           POST
             )
+            MEDIA_TYPE="video"
+            VIDEO_B64_PATH=".github/temp/telegram_video.mp4.b64"
           fi
 
           set +e
-          RESPONSE=$(curl --silent --show-error \
-            --request POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${MESSAGE_TEXT}")
-          CURL_EXIT=$?
+          if [ "$MEDIA_TYPE" = "video" ]; then
+            if [ ! -f "$VIDEO_B64_PATH" ]; then
+              RESPONSE='{"ok":false,"description":"video base64 file not found"}'
+              CURL_EXIT=1
+            else
+              base64 --decode "$VIDEO_B64_PATH" > /tmp/telegram-video.mp4
+              RESPONSE=$(curl --silent --show-error \
+                --request POST \
+                "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo" \
+                -F "chat_id=${TELEGRAM_CHAT_ID}" \
+                -F "video=@/tmp/telegram-video.mp4;type=video/mp4" \
+                -F "supports_streaming=true" \
+                -F "caption=${MESSAGE_TEXT}")
+              CURL_EXIT=$?
+            fi
+            FORMAT_TEXT="видео и текст"
+          else
+            RESPONSE=$(curl --silent --show-error \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${MESSAGE_TEXT}")
+            CURL_EXIT=$?
+            FORMAT_TEXT="текст"
+          fi
           set -e
 
           if [ "$CURL_EXIT" -eq 0 ] && [ "$(printf '%s' "$RESPONSE" | jq -r '.ok // false')" = "true" ]; then
             MESSAGE_ID=$(printf '%s' "$RESPONSE" | jq -r '.result.message_id')
             STATE='success'
             DESCRIPTION="Telegram message_id=${MESSAGE_ID}"
-            COMMENT="✅ Telegram подтвердил отправку текста. message_id=${MESSAGE_ID}"
+            COMMENT="✅ Telegram подтвердил отправку: ${FORMAT_TEXT}. message_id=${MESSAGE_ID}"
             RESULT=0
           else
             ERROR_TEXT=$(printf '%s' "$RESPONSE" | jq -r '.description // "Запрос не выполнен"' 2>/dev/null || printf 'Запрос не выполнен')
             STATE='failure'
             DESCRIPTION="Telegram: ${ERROR_TEXT}"
-            COMMENT="❌ Telegram не принял сообщение: ${ERROR_TEXT}; curl_exit=${CURL_EXIT}"
+            COMMENT="❌ Telegram не принял публикацию: ${ERROR_TEXT}; curl_exit=${CURL_EXIT}"
             RESULT=1
           fi
 
