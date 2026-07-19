@@ -24,33 +24,40 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Send content to Telegram and publish verifiable result
+      - name: Send post to Telegram and publish verifiable result
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MESSAGE_TEXT: ${{ inputs.message }}
+          MANUAL_MESSAGE: ${{ inputs.message }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -u
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            curl --silent --show-error --fail-with-body \
-              --request POST \
-              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-              --data-urlencode "text=${MESSAGE_TEXT}"
-            exit 0
-          fi
+            MESSAGE_TEXT="$MANUAL_MESSAGE"
+          else
+            MESSAGE_TEXT=$(cat <<'POST'
+          ☀️ Сегодняшний день начался очень продуктивно.
 
-          CAPTION='Тестовое сообщение с фотографией от ChatGPT ✅ Связка ChatGPT → GitHub Actions → Telegram работает.'
+          Сначала я проснулся и вкусно позавтракал — иногда именно такие простые моменты задают настроение на весь день. Потом встретился с мамой, а после поехал работать в офис.
+
+          Сегодня занимаюсь особенно интересной задачей: настраиваю автоматические публикации в Telegram с помощью GPT.
+
+          Идея простая: система будет анализировать прогресс проекта, превращать технические изменения в понятные посты и публиковать их через Telegram-бота. Первый важный этап уже готов — связка GitHub Actions → Telegram работает.
+
+          Теперь двигаюсь дальше: хочу, чтобы публикации создавались регулярно и почти без ручной работы.
+
+          Это только начало, но фундамент уже заложен. 🚀
+          POST
+            )
+          fi
 
           set +e
           RESPONSE=$(curl --silent --show-error \
             --request POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "photo=https://avatars.githubusercontent.com/u/247617988?v=4" \
-            --data-urlencode "caption=${CAPTION}")
+            --data-urlencode "text=${MESSAGE_TEXT}")
           CURL_EXIT=$?
           set -e
 
@@ -58,7 +65,7 @@ jobs:
             MESSAGE_ID=$(printf '%s' "$RESPONSE" | jq -r '.result.message_id')
             STATE='success'
             DESCRIPTION="Telegram message_id=${MESSAGE_ID}"
-            COMMENT="✅ Telegram подтвердил отправку фото и текста. message_id=${MESSAGE_ID}"
+            COMMENT="✅ Telegram подтвердил отправку текста. message_id=${MESSAGE_ID}"
             RESULT=0
           else
             ERROR_TEXT=$(printf '%s' "$RESPONSE" | jq -r '.description // "Запрос не выполнен"' 2>/dev/null || printf 'Запрос не выполнен')
