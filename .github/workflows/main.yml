@@ -2,12 +2,6 @@ name: Send Telegram Message
 
 on:
   workflow_dispatch:
-    inputs:
-      message:
-        description: "Текст сообщения"
-        required: true
-        default: "Тестовое сообщение от GitHub Actions"
-        type: string
   push:
 
 permissions:
@@ -24,61 +18,74 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Send post to Telegram and publish verifiable result
+      - name: Download and validate final GCod video
+        env:
+          VIDEO_URL: "https://production-273614-media-export.storage.googleapis.com/15289b00-92e8-4699-bc65-18b7e7899ad4/original.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=descript-api%40production-273614.iam.gserviceaccount.com%2F20260719%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260719T211512Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&X-Goog-Signature=c39a6e620619ddcd807fd1b35bd2bf77828fea4ee6aa0061d3fc3a033b9b11b43100525724a1f602fc3eff4e83a5eb586b24eeb75510fbc88f8ec0e9805ec965f24a34e121312909ccca82c0ecafb44d761bf1d0a7d6b570b5a7b5fec9a81ce8e8a985aaf8894df9c1267b9c720aeefc38d651ad9a76fe30dea96d3a1ad509f07f84c02bcddaee7568475d0c614921317315b743666e071962a92288e5c5a9329b7019176b127a563c12f98c3e6e780c668de2b8d8889f1f8e586cc9caf395fc99750dcf53d213dd722ff5a6cd4f5a014e6281b1ed9485d851564278150a06cb9db7752bd24255ca0f0af603c3a8df0ea3c6e5d81c6cab2f117af69e6c15fbac"
+        run: |
+          curl --fail --location --silent --show-error --retry 3 \
+            "$VIDEO_URL" \
+            --output /tmp/gcod-family-video.mp4
+          test -s /tmp/gcod-family-video.mp4
+          ffprobe -v error \
+            -show_entries format=duration,size \
+            -show_entries stream=codec_name,pix_fmt,width,height,r_frame_rate \
+            -of json \
+            /tmp/gcod-family-video.mp4
+
+      - name: Send video and publish verifiable result
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MANUAL_MESSAGE: ${{ inputs.message }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -u
+          CAPTION=$(cat <<'POST'
+          Вы сегодня час собирали таблицу выбора?
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            MESSAGE_TEXT="$MANUAL_MESSAGE"
-          else
-            MESSAGE_TEXT=$(cat <<'POST'
-          ☀️ Сегодняшний день начался очень продуктивно.
+          Мы загрузили две картинки — чертёж и таблицу производителя — нажали «Собрать» и примерно через 20 секунд получили основу семейства.
 
-          Сначала я проснулся и вкусно позавтракал — иногда именно такие простые моменты задают настроение на весь день. Потом встретился с мамой, а после поехал работать в офис.
+          GCod создал 14 параметров, опорные плоскости, размеры и таблицу выбора. Остаётся проверить результат и продолжить проектирование.
 
-          Сегодня занимаюсь особенно интересной задачей: настраиваю автоматические публикации в Telegram с помощью GPT.
+          Инженер не должен быть копировальным аппаратом.
+          Мы это руками не делаем.
 
-          Идея простая: система будет анализировать прогресс проекта, превращать технические изменения в понятные посты и публиковать их через Telegram-бота. Первый важный этап уже готов — связка GitHub Actions → Telegram работает.
+          Пишите предложения в комментариях — какую рутину превратить в следующую кнопку?
 
-          Теперь двигаюсь дальше: хочу, чтобы публикации создавались регулярно и почти без ручной работы.
-
-          Это только начало, но фундамент уже заложен. 🚀
+          #МыЭтоРукамиНеДелаем #GCodRevit #BIMБезРутины
           POST
-            )
-          fi
+          )
 
           set +e
           RESPONSE=$(curl --silent --show-error \
             --request POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${MESSAGE_TEXT}")
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo" \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "video=@/tmp/gcod-family-video.mp4;type=video/mp4" \
+            -F "supports_streaming=true" \
+            -F "caption=${CAPTION}")
           CURL_EXIT=$?
           set -e
 
-          if [ "$CURL_EXIT" -eq 0 ] && [ "$(printf '%s' "$RESPONSE" | jq -r '.ok // false')" = "true" ]; then
-            MESSAGE_ID=$(printf '%s' "$RESPONSE" | jq -r '.result.message_id')
+          OK=$(printf '%s' "$RESPONSE" | jq -r '.ok // false' 2>/dev/null || printf 'false')
+          MESSAGE_ID=$(printf '%s' "$RESPONSE" | jq -r '.result.message_id // empty' 2>/dev/null || true)
+          HAS_VIDEO=$(printf '%s' "$RESPONSE" | jq -r '.result.video != null' 2>/dev/null || printf 'false')
+
+          if [ "$CURL_EXIT" -eq 0 ] && [ "$OK" = "true" ] && [ -n "$MESSAGE_ID" ] && [ "$HAS_VIDEO" = "true" ]; then
             STATE='success'
             DESCRIPTION="Telegram message_id=${MESSAGE_ID}"
-            COMMENT="✅ Telegram подтвердил отправку текста. message_id=${MESSAGE_ID}"
+            COMMENT="✅ Telegram подтвердил GCod-видео и текст. message_id=${MESSAGE_ID}"
             RESULT=0
           else
             ERROR_TEXT=$(printf '%s' "$RESPONSE" | jq -r '.description // "Запрос не выполнен"' 2>/dev/null || printf 'Запрос не выполнен')
             STATE='failure'
             DESCRIPTION="Telegram: ${ERROR_TEXT}"
-            COMMENT="❌ Telegram не принял сообщение: ${ERROR_TEXT}; curl_exit=${CURL_EXIT}"
+            COMMENT="❌ Telegram не принял GCod-видео: ${ERROR_TEXT}; curl_exit=${CURL_EXIT}; ok=${OK}; has_video=${HAS_VIDEO}"
             RESULT=1
           fi
 
           DESCRIPTION=$(printf '%.130s' "$DESCRIPTION")
           jq -n \
             --arg state "$STATE" \
-            --arg context 'telegram-post' \
+            --arg context 'telegram-video-post' \
             --arg description "$DESCRIPTION" \
             '{state: $state, context: $context, description: $description}' \
             > /tmp/status.json
