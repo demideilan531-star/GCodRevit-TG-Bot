@@ -34,44 +34,154 @@ jobs:
           set -u
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            MESSAGE_TEXT="$MANUAL_MESSAGE"
+            FORMAT_LABEL="текст"
+            set +e
+            RESPONSE=$(curl --silent --show-error \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${MANUAL_MESSAGE}")
+            CURL_EXIT=$?
+            set -e
           else
-            MESSAGE_TEXT=$(cat <<'POST'
-          ☀️ Сегодняшний день начался очень продуктивно.
+            CAPTION=$(cat <<'POST'
+          🌿 <b>Мой день сегодня</b>
 
-          Сначала я проснулся и вкусно позавтракал — иногда именно такие простые моменты задают настроение на весь день. Потом встретился с мамой, а после поехал работать в офис.
+          Сегодня всё складывается по-доброму и продуктивно.
 
-          Сегодня занимаюсь особенно интересной задачей: настраиваю автоматические публикации в Telegram с помощью GPT.
+          Сначала вкусно поел жареной картошки 🥔 Затем встретился с мамой — приятно поболтали и провели время вместе. После этого прогулялся по парку, подышал свежим воздухом и немного перезагрузился.
 
-          Идея простая: система будет анализировать прогресс проекта, превращать технические изменения в понятные посты и публиковать их через Telegram-бота. Первый важный этап уже готов — связка GitHub Actions → Telegram работает.
+          А теперь я приехал в офис и занимаюсь автоматизацией публикаций в Telegram. Настраиваю систему, которая поможет создавать и отправлять посты быстрее и удобнее.
 
-          Теперь двигаюсь дальше: хочу, чтобы публикации создавались регулярно и почти без ручной работы.
-
-          Это только начало, но фундамент уже заложен. 🚀
+          Хороший день: близкие, прогулка и шаг вперёд в работе 🚀
           POST
             )
-          fi
 
-          set +e
-          RESPONSE=$(curl --silent --show-error \
-            --request POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${MESSAGE_TEXT}")
-          CURL_EXIT=$?
-          set -e
+            python3 - <<'PY'
+          import struct
+          import zlib
+          from pathlib import Path
+
+          width, height = 960, 540
+          pixels = bytearray([218, 236, 239]) * (width * height)
+
+          def set_pixel(x, y, color):
+              if 0 <= x < width and 0 <= y < height:
+                  i = (y * width + x) * 3
+                  pixels[i:i + 3] = bytes(color)
+
+          def rectangle(x1, y1, x2, y2, color):
+              x1, x2 = max(0, x1), min(width, x2)
+              y1, y2 = max(0, y1), min(height, y2)
+              row = bytes(color) * max(0, x2 - x1)
+              for y in range(y1, y2):
+                  start = (y * width + x1) * 3
+                  pixels[start:start + len(row)] = row
+
+          def circle(cx, cy, radius, color):
+              r2 = radius * radius
+              for y in range(max(0, cy - radius), min(height, cy + radius + 1)):
+                  dy2 = (y - cy) * (y - cy)
+                  span = int(max(0, r2 - dy2) ** 0.5)
+                  rectangle(cx - span, y, cx + span + 1, y + 1, color)
+
+          rectangle(0, 335, width, height, (225, 218, 199))
+          circle(815, 86, 55, (247, 204, 91))
+
+          for cx, scale in ((90, 1.0), (190, 0.82), (570, 0.78)):
+              trunk = int(22 * scale)
+              rectangle(cx - trunk // 2, 230, cx + trunk // 2, 385, (122, 86, 57))
+              circle(cx - int(28 * scale), 210, int(58 * scale), (91, 145, 92))
+              circle(cx + int(24 * scale), 195, int(62 * scale), (91, 145, 92))
+              circle(cx, 250, int(67 * scale), (91, 145, 92))
+
+          rectangle(680, 165, 875, 355, (161, 174, 183))
+          for x in range(700, 855, 38):
+              for y in range(190, 335, 42):
+                  rectangle(x, y, x + 18, y + 24, (226, 235, 238))
+
+          circle(245, 425, 152, (208, 208, 202))
+          circle(245, 425, 132, (255, 252, 244))
+          potatoes = (
+              (115, 380, 185, 414), (180, 360, 255, 398),
+              (255, 377, 335, 416), (128, 420, 205, 458),
+              (215, 415, 292, 455), (290, 426, 350, 462),
+          )
+          for x1, y1, x2, y2 in potatoes:
+              rectangle(x1, y1, x2, y2, (229, 166, 57))
+              rectangle(x1 + 4, y1 + 4, x2 - 4, y2 - 4, (237, 181, 71))
+
+          rectangle(595, 370, 910, 510, (133, 101, 77))
+          rectangle(650, 285, 845, 425, (65, 74, 84))
+          rectangle(668, 305, 827, 405, (221, 236, 241))
+          rectangle(735, 425, 760, 478, (76, 82, 88))
+          rectangle(690, 475, 805, 492, (76, 82, 88))
+
+          plane = ((705, 365), (802, 320), (770, 390), (746, 370), (725, 392))
+          min_y = min(y for _, y in plane)
+          max_y = max(y for _, y in plane)
+          for y in range(min_y, max_y + 1):
+              intersections = []
+              for (x1, y1), (x2, y2) in zip(plane, plane[1:] + plane[:1]):
+                  if y1 == y2:
+                      continue
+                  if min(y1, y2) <= y < max(y1, y2):
+                      x = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+                      intersections.append(int(x))
+              intersections.sort()
+              for left, right in zip(intersections[::2], intersections[1::2]):
+                  rectangle(left, y, right + 1, y + 1, (67, 152, 213))
+
+          raw = bytearray()
+          stride = width * 3
+          for y in range(height):
+              raw.append(0)
+              raw.extend(pixels[y * stride:(y + 1) * stride])
+
+          def chunk(kind, data):
+              return (
+                  struct.pack(">I", len(data))
+                  + kind
+                  + data
+                  + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+              )
+
+          png = (
+              b"\x89PNG\r\n\x1a\n"
+              + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+              + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+              + chunk(b"IEND", b"")
+          )
+          Path("/tmp/day.png").write_bytes(png)
+          PY
+
+            test -s /tmp/day.png
+            file /tmp/day.png
+
+            FORMAT_LABEL="фото и текст"
+            set +e
+            RESPONSE=$(curl --silent --show-error \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+              --form-string "chat_id=${TELEGRAM_CHAT_ID}" \
+              -F "photo=@/tmp/day.png;type=image/png" \
+              --form-string "caption=${CAPTION}" \
+              --form-string "parse_mode=HTML")
+            CURL_EXIT=$?
+            set -e
+          fi
 
           if [ "$CURL_EXIT" -eq 0 ] && [ "$(printf '%s' "$RESPONSE" | jq -r '.ok // false')" = "true" ]; then
             MESSAGE_ID=$(printf '%s' "$RESPONSE" | jq -r '.result.message_id')
             STATE='success'
             DESCRIPTION="Telegram message_id=${MESSAGE_ID}"
-            COMMENT="✅ Telegram подтвердил отправку текста. message_id=${MESSAGE_ID}"
+            COMMENT="✅ Telegram подтвердил отправку: ${FORMAT_LABEL}. message_id=${MESSAGE_ID}"
             RESULT=0
           else
             ERROR_TEXT=$(printf '%s' "$RESPONSE" | jq -r '.description // "Запрос не выполнен"' 2>/dev/null || printf 'Запрос не выполнен')
             STATE='failure'
             DESCRIPTION="Telegram: ${ERROR_TEXT}"
-            COMMENT="❌ Telegram не принял сообщение: ${ERROR_TEXT}; curl_exit=${CURL_EXIT}"
+            COMMENT="❌ Telegram не принял публикацию: ${ERROR_TEXT}; curl_exit=${CURL_EXIT}"
             RESULT=1
           fi
 
