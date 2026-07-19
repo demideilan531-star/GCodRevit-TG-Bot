@@ -1,1 +1,0 @@
-workflow is ready; issue comment triggers the one-time publication
