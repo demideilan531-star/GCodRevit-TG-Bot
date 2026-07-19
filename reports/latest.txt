@@ -1,46 +1,45 @@
-Проверка Gmail: 19 июля 2026, 02:03 МСК
-Новых писем за последние 65 минут: 7
+Проверка Gmail: 19 июля 2026, 03:03 МСК
+Новых писем за последние 65 минут: 6
 
 СРОЧНЫЕ / ТЕХНИЧЕСКИЕ
-1. 01:57 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: .github/workflows/main.yml - main (9e2d59f)
-Суть: workflow main.yml завершился без запуска задач — «No jobs were run».
-Действие: проверить условия запуска и синтаксис workflow, затем повторить запуск.
+1. 02:34 — GitHub notifications
+Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (b359ca5)
+Суть: workflow Send Telegram Message завершился ошибкой; шаг «Send message or verified photo post» не выполнился.
+Действие: проверить ошибку шага отправки в Telegram и параметры Telegram API; до исправления не запускать повторные проверки вручную.
 
-2. 01:56 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: .github/workflows/main.yml - main (9032b95)
-Суть: workflow main.yml завершился без запуска задач — «No jobs were run».
-Действие: проверить условия запуска и синтаксис workflow, затем повторить запуск.
+2. 02:32 — GitHub notifications
+Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (026c100)
+Суть: повторный запуск workflow Send Telegram Message завершился ошибкой на этапе отправки сообщения или фотографии.
+Действие: проверить логи шага отправки и исправить причину сбоя перед новым запуском.
 
-3. 01:50 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: .github/workflows/main.yml - main (e2b7796)
-Суть: workflow main.yml завершился без запуска задач — «No jobs were run».
-Действие: проверить условия запуска и синтаксис workflow, затем повторить запуск.
+3. 02:29 — GitHub notifications
+Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (bfe610f)
+Суть: workflow Send Telegram Message снова завершился ошибкой.
+Действие: проверить логи Telegram-запроса, токен, chat_id и наличие отправляемого файла.
 
-4. 01:49 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: .github/workflows/main.yml - main (69b4b35)
-Суть: workflow main.yml завершился без запуска задач — «No jobs were run».
-Действие: проверить условия запуска и синтаксис workflow, затем повторить запуск.
+4. 02:25 — GitHub notifications
+Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (63c9b63)
+Суть: очередной запуск workflow Send Telegram Message завершился ошибкой.
+Действие: устранить причину сбоя шага отправки, затем выполнить один контрольный запуск.
 
-5. 01:49 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: .github/workflows/main.yml - main (f17f67c)
-Суть: workflow main.yml завершился без запуска задач — «No jobs were run».
-Действие: проверить условия запуска и синтаксис workflow, затем повторить запуск.
+5. 02:22 — GitHub notifications
+Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (77785a1)
+Суть: workflow Send Telegram Message завершился ошибкой через несколько секунд после запуска.
+Действие: открыть аннотации и логи шага send-message и проверить параметры запроса к Telegram.
 
-6. 01:48 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: .github/workflows/main.yml - main (b70e449)
-Суть: workflow main.yml завершился без запуска задач — «No jobs were run».
-Действие: проверить условия запуска и синтаксис workflow, затем повторить запуск.
+6. 02:12 — GitHub notifications
+Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Gmail Report Photo - main (dec1036)
+Суть: общий запуск был помечен как неудачный из-за служебного шага записи подтверждения; создание отчёта и отправка фотографии в Telegram завершились успешно.
+Действие: дополнительных действий не требуется — проблемный служебный шаг уже удалён.
 
-7. 01:46 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: .github/workflows/main.yml - main (844cb27)
-Суть: workflow main.yml завершился без запуска задач — «No jobs were run».
-Действие: проверить условия запуска и синтаксис workflow, затем повторить запуск.
-
+ИТОГ
+Срочные/технические письма: 6
 Ответы по работе/учёбе: 0
 Приглашения: 0
 Финансовые вопросы: 0
 Угрозы безопасности: 0
 Одноразовые письма: 0
+
+Главная проблема: пять последовательных запусков Send Telegram Message завершились ошибкой на этапе отправки. Требуется проверить Telegram API, секреты TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID, а также наличие и путь к фотографии.
 
 GitHub: отчёт записан в reports/latest.txt, ветка main.
