@@ -1,0 +1,80 @@
+name: Send Uploaded Telegram Video
+
+on:
+  push:
+
+permissions:
+  contents: read
+  issues: write
+  statuses: write
+
+jobs:
+  send-video:
+    if: github.event.head_commit.message == 'TRIGGER_UPLOADED_VIDEO'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild uploaded MP4
+        run: |
+          set -euo pipefail
+          cat temp_video/part_*.b64 | base64 --decode > /tmp/uploaded-video.mp4
+          test -s /tmp/uploaded-video.mp4
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 /tmp/uploaded-video.mp4
+
+      - name: Send video and record Telegram confirmation
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          RESPONSE=$(curl --silent --show-error \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo" \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "video=@/tmp/uploaded-video.mp4;type=video/mp4" \
+            -F "supports_streaming=true" \
+            -F $'caption=Вы сегодня час собирали таблицу выбора?\n\nМы загрузили две картинки — чертёж и таблицу производителя — нажали «Собрать» и примерно через 20 секунд получили основу семейства.\n\nGCod создал 14 параметров, опорные плоскости, размеры и таблицу выбора. Остаётся проверить результат и продолжить проектирование.\n\nИнженер не должен быть копировальным аппаратом.\nМы это руками не делаем.\n\nПишите предложения в комментариях — какую рутину превратить в следующую кнопку?\n\n#МыЭтоРукамиНеДелаем #GCodRevit #BIMБезРутины')
+          CURL_EXIT=$?
+          set -e
+
+          OK=$(printf '%s' "$RESPONSE" | jq -r '.ok // false' 2>/dev/null || printf 'false')
+          MESSAGE_ID=$(printf '%s' "$RESPONSE" | jq -r '.result.message_id // empty' 2>/dev/null || true)
+
+          if [ "$CURL_EXIT" -eq 0 ] && [ "$OK" = "true" ] && [ -n "$MESSAGE_ID" ]; then
+            STATE='success'
+            DESCRIPTION="Telegram message_id=${MESSAGE_ID}"
+            COMMENT="✅ Telegram подтвердил отправку загруженного видео и текста. message_id=${MESSAGE_ID}"
+            RESULT=0
+          else
+            ERROR_TEXT=$(printf '%s' "$RESPONSE" | jq -r '.description // "Запрос не выполнен"' 2>/dev/null || printf 'Запрос не выполнен')
+            STATE='failure'
+            DESCRIPTION="Telegram: ${ERROR_TEXT}"
+            COMMENT="❌ Telegram не принял загруженное видео: ${ERROR_TEXT}; curl_exit=${CURL_EXIT}"
+            RESULT=1
+          fi
+
+          DESCRIPTION=$(printf '%.130s' "$DESCRIPTION")
+          jq -n --arg state "$STATE" --arg context 'telegram-uploaded-video' --arg description "$DESCRIPTION" \
+            '{state: $state, context: $context, description: $description}' > /tmp/status.json
+
+          curl --silent --show-error --fail-with-body \
+            --request POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            --data-binary @/tmp/status.json
+
+          jq -n --arg body "$COMMENT" '{body: $body}' > /tmp/comment.json
+          curl --silent --show-error \
+            --request POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/1/comments" \
+            --data-binary @/tmp/comment.json >/dev/null || true
+
+          exit "$RESULT"
