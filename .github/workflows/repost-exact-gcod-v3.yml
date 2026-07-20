@@ -1,8 +1,7 @@
 name: Repost Exact GCod Video V3
 
 on:
-  issue_comment:
-    types: [created]
+  push:
 
 permissions:
   contents: read
@@ -11,12 +10,21 @@ permissions:
 
 jobs:
   repost-video:
-    if: >-
-      github.event.issue.number == 1 &&
-      github.event.comment.body == 'SEND_EXACT_GCOD_VIDEO_V3_REPOST_SHA37948517'
+    if: github.event.head_commit.message == 'TRIGGER_EXACT_GCOD_VIDEO_V3_REPOST_SHA37948517'
     runs-on: ubuntu-latest
 
     steps:
+      - name: Prevent duplicate confirmed repost
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          COMMENTS=$(curl --silent --show-error --fail-with-body -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/1/comments?per_page=100")
+          if printf '%s' "$COMMENTS" | jq -e 'any(.[]; (.body // "") | contains("marker=EXACT_GCOD_V3_REPOST_SHA37948517"))' >/dev/null; then
+            echo 'Exact repost already confirmed; skipping duplicate.'
+            exit 78
+          fi
+
       - name: Download and verify exact final video
         env:
           VIDEO_URL_B64: 'aHR0cHM6Ly9wcm9kdWN0aW9uLTI3MzYxNC1tZWRpYS1leHBvcnQuc3RvcmFnZS5nb29nbGVhcGlzLmNvbS80ZWIwZmY4NS1mNTU2LTQyODUtYjM2OS0zOTJjODI0MDliNzkvb3JpZ2luYWwubXA0P1gtR29vZy1BbGdvcml0aG09R09PRzQtUlNBLVNIQTI1NiZYLUdvb2ctQ3JlZGVudGlhbD1kZXNjcmlwdC1hcGklNDBwcm9kdWN0aW9uLTI3MzYxNC5pYW0uZ3NlcnZpY2VhY2NvdW50LmNvbSUyRjIwMjYwNzIwJTJGYXV0byUyRnN0b3JhZ2UlMkZnb29nNF9yZXF1ZXN0JlgtR29vZy1EYXRlPTIwMjYwNzIwVDA3MjczNlomWC1Hb29nLUV4cGlyZXM9ODY0MDAmWC1Hb29nLVNpZ25lZEhlYWRlcnM9aG9zdCZYLUdvb2ctU2lnbmF0dXJlPTM5MzU2MmMzM2IzMjA0Njc1NTdjM2UxZDlhZTEwZmRkNDkyZmEzOGVjMzBjOTAwZWQ2Zjk2ZGE4MTlhNzQ1YTBmYmRjYWNiZmRkMWQzZTQ5MmQ2Mjk0OTEzOWE5ZDk0YmNmZmI3MzQyZmY5MjZhZWM0OTBjNDg4MmU2ZDg4YTI1MWRhYWRhNWU5ZjM5ZDQ0MTBiMDU3OWNmOTk1MjQ0MGU2YmMwZTk4MWQ4ZjE4M2RhMGMxMTQ3MmJmNmNmYzZhNWU4ZjAxMDg0ZTI0MDQxNTM0YmNkNmU4MTI3ZDFlNWYxODlmNzZiZjA4YTVmM2MwOWU0ZGI1YjM2NzYwYTViODQxNzczMzJhMWZlNmM4OGFhNTJmNWEzZjdlNmFiZGU0ZjBjMTNiYjhhNDllM2EzZWMwZTc4ZTI2NDE3MTkwMDc4ODRhYTU1YjE2ZjczOGZiMWJlZWZjNDVhNTdiZjk4ZDk1YzRhMTdmOWEzNzAwZWQwYWQ4MGQ3MDgyNmIyZTVkODkxZmQ1OGE4YjBmNjk0YWQwN2RhODJjODQ1OTg4OGRmZWFhZmEzNmJlOTZiOGJlNTEzY2IyMGZkYjQwZTY5MGRjNTFhNThiNTY3MDlkZjM4MTFkNTNhYjI2MWE4YjA1ZjQ4ZjQwODEyOTQ3OGJhZGEwMjVhNzI2NTIwNTQ1N2E3'
