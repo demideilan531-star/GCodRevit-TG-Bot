@@ -1,6 +1,21 @@
 name: Send Uploaded Telegram Video
 
 on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "Прямая ссылка на MP4"
+        required: false
+        type: string
+      repository_path:
+        description: "Путь к MP4 внутри репозитория"
+        required: false
+        type: string
+      caption:
+        description: "Подпись к видео"
+        required: true
+        default: "Видео GCod Revit"
+        type: string
   push:
 
 permissions:
@@ -10,23 +25,51 @@ permissions:
 
 jobs:
   send-video:
-    if: github.event.head_commit.message == 'TRIGGER_UPLOADED_VIDEO'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.event.head_commit.message == 'TRIGGER_UPLOADED_VIDEO')
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Rebuild uploaded MP4
+      - name: Prepare MP4
+        env:
+          VIDEO_URL: ${{ inputs.video_url }}
+          REPOSITORY_PATH: ${{ inputs.repository_path }}
         run: |
           set -euo pipefail
-          cat temp_video/part_*.b64 | base64 --decode > /tmp/uploaded-video.mp4
+
+          if [ -n "${VIDEO_URL:-}" ]; then
+            curl --location --fail --silent --show-error \
+              "$VIDEO_URL" \
+              --output /tmp/uploaded-video.mp4
+          elif [ -n "${REPOSITORY_PATH:-}" ]; then
+            cp "$REPOSITORY_PATH" /tmp/uploaded-video.mp4
+          elif compgen -G 'temp_video/part_*.b64' >/dev/null; then
+            cat temp_video/part_*.b64 | base64 --decode > /tmp/uploaded-video.mp4
+          else
+            echo 'Не передан video_url, repository_path и нет частей base64.' >&2
+            exit 1
+          fi
+
           test -s /tmp/uploaded-video.mp4
-          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 /tmp/uploaded-video.mp4
+          MIME=$(file --brief --mime-type /tmp/uploaded-video.mp4)
+          if [ "$MIME" != 'video/mp4' ] && [ "$MIME" != 'application/octet-stream' ]; then
+            echo "Получен неподдерживаемый тип файла: $MIME" >&2
+            exit 1
+          fi
+
+          ffprobe -v error \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 \
+            /tmp/uploaded-video.mp4
 
       - name: Send video and record Telegram confirmation
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CAPTION_TEXT: ${{ inputs.caption }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
@@ -36,7 +79,7 @@ jobs:
             -F "chat_id=${TELEGRAM_CHAT_ID}" \
             -F "video=@/tmp/uploaded-video.mp4;type=video/mp4" \
             -F "supports_streaming=true" \
-            -F $'caption=Вы сегодня час собирали таблицу выбора?\n\nМы загрузили две картинки — чертёж и таблицу производителя — нажали «Собрать» и примерно через 20 секунд получили основу семейства.\n\nGCod создал 14 параметров, опорные плоскости, размеры и таблицу выбора. Остаётся проверить результат и продолжить проектирование.\n\nИнженер не должен быть копировальным аппаратом.\nМы это руками не делаем.\n\nПишите предложения в комментариях — какую рутину превратить в следующую кнопку?\n\n#МыЭтоРукамиНеДелаем #GCodRevit #BIMБезРутины')
+            --form-string "caption=${CAPTION_TEXT}")
           CURL_EXIT=$?
           set -e
 
