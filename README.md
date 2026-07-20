@@ -23,7 +23,8 @@
 
 ## Кнопка отчёта Gmail
 
-Скрипт `scripts/gmail_button_bot.py` запускает Telegram-бота с одной кнопкой:
+Для SpaceWeb используется PHP webhook `hosting/spaceweb/telegram-webhook.php`.
+Он запускает Telegram-бота с одной кнопкой:
 
 ```text
 📬 Отчёт по Gmail
@@ -32,7 +33,47 @@
 По нажатию кнопки бот запускает workflow `.github/workflows/hourly-gmail-telegram.yml`.
 Workflow анализирует Gmail, создаёт картинку по шаблону и публикует в канал один пост: фото + подпись.
 
-Для запуска кнопочного бота нужны переменные окружения:
+### Настройка на SpaceWeb
+
+1. Загрузи в `public_html` файл `hosting/spaceweb/telegram-webhook.php`.
+2. Загрузи рядом файл `hosting/spaceweb/telegram-webhook-config.sample.php`.
+3. Переименуй его на хостинге в `telegram-webhook-config.php`.
+4. Заполни в `telegram-webhook-config.php` реальные значения:
+
+- `telegram_bot_token` — токен Telegram-бота.
+- `telegram_admin_ids` — `1839693017`.
+- `telegram_webhook_secret` — длинная случайная строка для защиты webhook.
+- `github_token` — GitHub token с правом запускать Actions workflow. Для fine-grained token дай доступ к этому репозиторию и permission `Actions: Read and write`.
+- `github_repository` — `demideilan531-star/GCodRevit-TG-Bot`.
+- `github_workflow_id` — `hourly-gmail-telegram.yml`.
+- `github_ref` — `main`.
+
+5. Проверь, что файл открывается:
+
+```text
+https://demideilan.temp.swtest.ru/telegram-webhook.php?health=1
+```
+
+Ответ должен быть:
+
+```text
+OK
+```
+
+6. Привяжи webhook в Telegram:
+
+```bash
+curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -d "url=https://demideilan.temp.swtest.ru/telegram-webhook.php" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+После этого открой бота в Telegram и отправь `/start`. Бот покажет кнопку `📬 Отчёт по Gmail`.
+
+### Альтернатива: Python polling
+
+Скрипт `scripts/gmail_button_bot.py` можно использовать на сервере, где разрешены постоянные Python-процессы.
+Для запуска нужны переменные окружения:
 
 - `TELEGRAM_BOT_TOKEN` — токен того же Telegram-бота.
 - `TELEGRAM_ADMIN_IDS` — Telegram user ID пользователей, которым разрешено нажимать кнопку, через запятую.
