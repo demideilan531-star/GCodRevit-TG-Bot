@@ -1,7 +1,8 @@
 name: Publish Exact GCod Video V3
 
 on:
-  push:
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -10,10 +11,19 @@ permissions:
 
 jobs:
   publish-video:
-    if: github.event.head_commit.message == 'TRIGGER_TELEGRAM_EXACT_VIDEO_V3'
+    if: >-
+      github.event.issue.number == 1 &&
+      github.event.comment.body == 'SEND_EXACT_GCOD_VIDEO_V3_20260720'
     runs-on: ubuntu-latest
 
     steps:
+      - name: Install video verification tools
+        run: |
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+
       - name: Download and verify the exact 45-second final composition
         env:
           VIDEO_URL: 'https://production-273614-media-export.storage.googleapis.com/4eb0ff85-f556-4285-b369-392c82409b79/original.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=descript-api%40production-273614.iam.gserviceaccount.com%2F20260720%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260720T072736Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&X-Goog-Signature=393562c33b320467557c3e1d9ae10fdd492fa38ec30c900ed6f96da819a745a0fbdcacbfdd1d3e492d62949139a9d94bcffb7342ff926aec490c4882e6d88a251daada5e9f39d4410b0579cf9952440e6bc0e981d8f183da0c11472bf6cfc6a5e8f01084e24041534bcd6e8127d1e5f189f76bf08a5f3c09e4db5b36760a5b84177332a1fe6c88aa52f5a3f7e6abde4f0c13bb8a49e3a3ec0e78e2641719007884aa55b16f738fb1beefc45a57bf98d95c4a17f9a3700ed0ad80d70826b2e5d891fd58a8b0f694ad07da82c8459888dfeaafa36be96b8be513cb20fdb40e690dc51a58b56709df3811d53ab261a8b05f48f408129478bada025a7265205457a7'
