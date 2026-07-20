@@ -1,0 +1,1 @@
+Temporary transport for the verified GCod final v3 Telegram video. Files are removed after Telegram returns message_id.
