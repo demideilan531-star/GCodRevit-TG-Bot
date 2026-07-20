@@ -1,45 +1,15 @@
-Проверка Gmail: 19 июля 2026, 03:03 МСК
-Новых писем за последние 65 минут: 6
+Проверка Gmail: 20.07.2026, 19:27 МСК
+Период: 18:22–19:27 МСК
+Новых писем за последние 65 минут: 0
 
-СРОЧНЫЕ / ТЕХНИЧЕСКИЕ
-1. 02:34 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (b359ca5)
-Суть: workflow Send Telegram Message завершился ошибкой; шаг «Send message or verified photo post» не выполнился.
-Действие: проверить ошибку шага отправки в Telegram и параметры Telegram API; до исправления не запускать повторные проверки вручную.
-
-2. 02:32 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (026c100)
-Суть: повторный запуск workflow Send Telegram Message завершился ошибкой на этапе отправки сообщения или фотографии.
-Действие: проверить логи шага отправки и исправить причину сбоя перед новым запуском.
-
-3. 02:29 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (bfe610f)
-Суть: workflow Send Telegram Message снова завершился ошибкой.
-Действие: проверить логи Telegram-запроса, токен, chat_id и наличие отправляемого файла.
-
-4. 02:25 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (63c9b63)
-Суть: очередной запуск workflow Send Telegram Message завершился ошибкой.
-Действие: устранить причину сбоя шага отправки, затем выполнить один контрольный запуск.
-
-5. 02:22 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Telegram Message - main (77785a1)
-Суть: workflow Send Telegram Message завершился ошибкой через несколько секунд после запуска.
-Действие: открыть аннотации и логи шага send-message и проверить параметры запроса к Telegram.
-
-6. 02:12 — GitHub notifications
-Тема: [demideilan531-star/GCodRevit-TG-Bot] Run failed: Send Gmail Report Photo - main (dec1036)
-Суть: общий запуск был помечен как неудачный из-за служебного шага записи подтверждения; создание отчёта и отправка фотографии в Telegram завершились успешно.
-Действие: дополнительных действий не требуется — проблемный служебный шаг уже удалён.
+ОШИБКА ПРОВЕРКИ
+Суть: b'[AUTHENTICATIONFAILED] Invalid credentials (Failure)'
+Действие: проверить секреты Gmail и журнал GitHub Actions.
 
 ИТОГ
-Срочные/технические письма: 6
+Срочные/технические письма: 1
 Ответы по работе/учёбе: 0
 Приглашения: 0
 Финансовые вопросы: 0
 Угрозы безопасности: 0
 Одноразовые письма: 0
-
-Главная проблема: пять последовательных запусков Send Telegram Message завершились ошибкой на этапе отправки. Требуется проверить Telegram API, секреты TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID, а также наличие и путь к фотографии.
-
-GitHub: отчёт записан в reports/latest.txt, ветка main.
