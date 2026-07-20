@@ -1,0 +1,92 @@
+name: Telegram Post
+
+on:
+  workflow_dispatch:
+    inputs:
+      post_type:
+        description: "Тип поста"
+        required: true
+        default: "text"
+        type: choice
+        options:
+          - text
+          - photo
+          - video
+      text:
+        description: "Текст поста или подпись к медиа"
+        required: true
+        type: string
+      media_url:
+        description: "Прямая ссылка на JPG/PNG/WebP или MP4"
+        required: false
+        type: string
+      repository_path:
+        description: "Путь к файлу в репозитории, например assets/post.mp4"
+        required: false
+        type: string
+      parse_mode:
+        description: "HTML или MarkdownV2, если нужен форматированный текст"
+        required: false
+        default: ""
+        type: string
+      disable_notification:
+        description: "Отправить без уведомления"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-post
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install video tools when needed
+        if: ${{ inputs.post_type == 'video' }}
+        run: |
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+
+      - name: Publish post to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          POST_TYPE: ${{ inputs.post_type }}
+          POST_TEXT: ${{ inputs.text }}
+          MEDIA_URL: ${{ inputs.media_url }}
+          REPOSITORY_PATH: ${{ inputs.repository_path }}
+          PARSE_MODE: ${{ inputs.parse_mode }}
+          DISABLE_NOTIFICATION: ${{ inputs.disable_notification }}
+        run: |
+          set -euo pipefail
+
+          args=(--type "$POST_TYPE" --text "$POST_TEXT")
+
+          if [ -n "${MEDIA_URL:-}" ]; then
+            args+=(--media-url "$MEDIA_URL")
+          fi
+
+          if [ -n "${REPOSITORY_PATH:-}" ]; then
+            args+=(--repository-path "$REPOSITORY_PATH")
+          fi
+
+          if [ -n "${PARSE_MODE:-}" ]; then
+            args+=(--parse-mode "$PARSE_MODE")
+          fi
+
+          if [ "${DISABLE_NOTIFICATION:-false}" = "true" ]; then
+            args+=(--disable-notification)
+          fi
+
+          python3 scripts/telegram_post.py "${args[@]}"
