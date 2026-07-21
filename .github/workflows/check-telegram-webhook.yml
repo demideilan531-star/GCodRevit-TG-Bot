@@ -18,3 +18,14 @@ jobs:
         run: |
           set -euo pipefail
           curl -v --max-time 20 "https://tgbotgcodrevit.ru/telegram-webhook.php?health=1"
+
+      - name: Check webhook POST from GitHub runner
+        env:
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          curl -v --max-time 20 \
+            -H "Content-Type: application/json" \
+            -H "X-Telegram-Bot-Api-Secret-Token: ${TELEGRAM_WEBHOOK_SECRET}" \
+            --data '{"update_id":1,"message":{"message_id":1,"from":{"id":1839693017,"is_bot":false,"first_name":"Test"},"chat":{"id":1839693017,"type":"private"},"date":1780000000,"text":"/start"}}' \
+            "https://tgbotgcodrevit.ru/telegram-webhook.php"
