@@ -7,6 +7,13 @@ jobs:
   check-webhook:
     runs-on: ubuntu-latest
     steps:
+      - name: Check bot identity
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
+
       - name: Check webhook info
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
