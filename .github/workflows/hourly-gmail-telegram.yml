@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch:
+    inputs:
+      notify_chat_id:
+        description: "Telegram chat_id for completion notification"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -57,6 +62,7 @@ jobs:
         run: python scripts/hourly_gmail_report.py
 
       - name: Publish one Telegram post with photo and caption
+        id: publish_report
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -80,6 +86,34 @@ jobs:
 
           message_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin)["result"]["message_id"])')
           echo "Telegram accepted the Gmail report. message_id=${message_id}"
+
+      - name: Notify requester
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.notify_chat_id != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          NOTIFY_CHAT_ID: ${{ inputs.notify_chat_id }}
+          REPORT_SENT: ${{ steps.publish_report.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+
+          if [ "${REPORT_SENT}" = "true" ]; then
+            if grep -q "ОШИБКА ПРОВЕРКИ" reports/latest.txt; then
+              message="⚠️ Отчёт отправлен, но Gmail вернул ошибку проверки. Проверь пост в канале."
+            else
+              message="✅ Отчёт отправлен."
+            fi
+          else
+            message="❌ Не удалось отправить отчёт. Проверь GitHub Actions."
+          fi
+
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${NOTIFY_CHAT_ID}" \
+            --data-urlencode "text=${message}" \
+            > /tmp/telegram_notify_response.json
 
       - name: Save latest report and processed-message state
         run: |
