@@ -1,7 +1,10 @@
 <?php
 declare(strict_types=1);
 
-const BUTTON_TEXT = '📬 Отчёт по Gmail';
+const BUTTON_GMAIL = '📬 Отчёт Gmail';
+const BUTTON_GITHUB = '🧩 GitHub';
+const BUTTON_VIDEO = '🎬 Видео GCodRevit';
+const BUTTON_WEATHER = '🌤 Погода';
 const DEFAULT_REPOSITORY = 'demideilan531-star/GCodRevit-TG-Bot';
 const DEFAULT_WORKFLOW = 'hourly-gmail-telegram.yml';
 const DEFAULT_REF = 'main';
@@ -23,6 +26,8 @@ function load_config(): array
         'github_workflow_id' => env_value('GMAIL_WORKFLOW_ID', DEFAULT_WORKFLOW),
         'github_ref' => env_value('GITHUB_REF', DEFAULT_REF),
         'cooldown_seconds' => (int) env_value('GMAIL_BUTTON_COOLDOWN_SECONDS', '300'),
+        'http_timeout' => (int) env_value('GCOD_HTTP_TIMEOUT', '15'),
+        'http_connect_timeout' => (int) env_value('GCOD_HTTP_CONNECT_TIMEOUT', '5'),
         'state_file' => env_value(
             'GCOD_WEBHOOK_STATE_FILE',
             rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'gcod-gmail-webhook-state.json'
@@ -41,6 +46,14 @@ function load_config(): array
 }
 
 function fail(int $status, string $message): void
+{
+    http_response_code($status);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo $message;
+    exit;
+}
+
+function plain_response(string $message, int $status = 200): void
 {
     http_response_code($status);
     header('Content-Type: text/plain; charset=utf-8');
@@ -70,7 +83,13 @@ function verify_telegram_secret(array $config): void
     }
 }
 
-function http_json(string $url, array $payload, array $headers = [], ?int $expectedStatus = null): array
+function http_json(
+    string $url,
+    array $payload,
+    array $headers = [],
+    ?int $expectedStatus = null,
+    ?array $config = null
+): array
 {
     $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($body === false) {
@@ -79,6 +98,8 @@ function http_json(string $url, array $payload, array $headers = [], ?int $expec
 
     $headers[] = 'Content-Type: application/json';
     $headers[] = 'Content-Length: ' . strlen($body);
+    $timeout = max(3, (int) ($config['http_timeout'] ?? 15));
+    $connectTimeout = max(2, (int) ($config['http_connect_timeout'] ?? 5));
 
     if (function_exists('curl_init')) {
         $ch = curl_init($url);
@@ -88,8 +109,12 @@ function http_json(string $url, array $payload, array $headers = [], ?int $expec
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER => true,
-            CURLOPT_TIMEOUT => 90,
+            CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+            CURLOPT_TIMEOUT => $timeout,
         ]);
+        if (defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
+            curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        }
         $raw = curl_exec($ch);
         if ($raw === false) {
             $error = curl_error($ch);
@@ -106,7 +131,7 @@ function http_json(string $url, array $payload, array $headers = [], ?int $expec
                 'method' => 'POST',
                 'header' => implode("\r\n", $headers),
                 'content' => $body,
-                'timeout' => 90,
+                'timeout' => $timeout,
                 'ignore_errors' => true,
             ],
         ]);
@@ -139,7 +164,10 @@ function telegram_api(array $config, string $method, array $payload): array
 {
     $response = http_json(
         'https://api.telegram.org/bot' . $config['telegram_bot_token'] . '/' . $method,
-        $payload
+        $payload,
+        [],
+        null,
+        $config
     );
 
     if (($response['ok'] ?? false) !== true) {
@@ -158,7 +186,10 @@ function send_message(array $config, $chatId, string $text, bool $withKeyboard =
 
     if ($withKeyboard) {
         $payload['reply_markup'] = [
-            'keyboard' => [[['text' => BUTTON_TEXT]]],
+            'keyboard' => [
+                [['text' => BUTTON_GMAIL], ['text' => BUTTON_GITHUB]],
+                [['text' => BUTTON_VIDEO], ['text' => BUTTON_WEATHER]],
+            ],
             'resize_keyboard' => true,
             'one_time_keyboard' => false,
             'is_persistent' => true,
@@ -166,6 +197,16 @@ function send_message(array $config, $chatId, string $text, bool $withKeyboard =
     }
 
     telegram_api($config, 'sendMessage', $payload);
+}
+
+function set_bot_commands(array $config): void
+{
+    telegram_api($config, 'setMyCommands', [
+        'commands' => [
+            ['command' => 'start', 'description' => 'Показать клавиатуру'],
+            ['command' => 'menu', 'description' => 'Показать меню действий'],
+        ],
+    ]);
 }
 
 function parse_admin_ids(string $raw): array
@@ -225,7 +266,14 @@ function mark_cooldown(array $config, int $userId): void
     write_state($config, $state);
 }
 
-function dispatch_gmail_workflow(array $config): void
+function update_poll_offset(array $config, int $offset): void
+{
+    $state = read_state($config);
+    $state['telegram_update_offset'] = $offset;
+    write_state($config, $state);
+}
+
+function dispatch_gmail_workflow(array $config, $notifyChatId): void
 {
     $repository = (string) $config['github_repository'];
     $workflow = rawurlencode((string) $config['github_workflow_id']);
@@ -233,15 +281,124 @@ function dispatch_gmail_workflow(array $config): void
 
     http_json(
         $url,
-        ['ref' => (string) $config['github_ref']],
+        [
+            'ref' => (string) $config['github_ref'],
+            'inputs' => [
+                'notify_chat_id' => (string) $notifyChatId,
+            ],
+        ],
         [
             'Accept: application/vnd.github+json',
             'Authorization: Bearer ' . $config['github_token'],
             'User-Agent: GCodRevit-TG-Bot-SpaceWeb',
             'X-GitHub-Api-Version: 2022-11-28',
         ],
-        204
+        204,
+        $config
     );
+}
+
+function first_admin_id(array $config): ?int
+{
+    $ids = parse_admin_ids((string) $config['telegram_admin_ids']);
+    return $ids[0] ?? null;
+}
+
+function query_secret_is_valid(array $config): bool
+{
+    $expected = (string) ($config['telegram_webhook_secret'] ?? '');
+    $actual = (string) ($_GET['key'] ?? '');
+    return $expected !== '' && $actual !== '' && hash_equals($expected, $actual);
+}
+
+function handle_get_action(array $config): void
+{
+    if (isset($_GET['health'])) {
+        plain_response('OK');
+    }
+
+    $action = (string) ($_GET['action'] ?? '');
+    if ($action === '') {
+        plain_response('GCodRevit Telegram webhook is ready.');
+    }
+
+    assert_required_config($config);
+    if (!query_secret_is_valid($config)) {
+        plain_response('Forbidden', 403);
+    }
+
+    if ($action === 'send-menu') {
+        $adminId = first_admin_id($config);
+        if ($adminId === null) {
+            plain_response('No admin id configured.', 500);
+        }
+        send_message($config, $adminId, 'Выбери действие на клавиатуре. Сейчас полностью подключена кнопка почты.');
+        plain_response('Menu sent');
+    }
+
+    if ($action === 'test-telegram') {
+        $adminId = first_admin_id($config);
+        if ($adminId === null) {
+            plain_response('No admin id configured.', 500);
+        }
+        send_message($config, $adminId, 'Проверка Telegram API с хостинга прошла.');
+        plain_response('Telegram test sent');
+    }
+
+    if ($action === 'set-commands') {
+        set_bot_commands($config);
+        plain_response('Bot commands configured');
+    }
+
+    if ($action === 'delete-webhook') {
+        telegram_api($config, 'deleteWebhook', ['drop_pending_updates' => false]);
+        plain_response('Telegram webhook deleted. Manual polling test mode is available.');
+    }
+
+    if ($action === 'poll-once') {
+        $state = read_state($config);
+        $payload = [
+            'timeout' => 0,
+            'allowed_updates' => ['message'],
+        ];
+        if (!empty($state['telegram_update_offset'])) {
+            $payload['offset'] = (int) $state['telegram_update_offset'];
+        }
+
+        $response = telegram_api($config, 'getUpdates', $payload);
+        $updates = $response['result'] ?? [];
+        $processed = 0;
+        foreach ($updates as $update) {
+            if (isset($update['update_id'])) {
+                update_poll_offset($config, ((int) $update['update_id']) + 1);
+            }
+            if (is_array($update)) {
+                handle_update($config, $update);
+                $processed++;
+            }
+        }
+
+        plain_response("Processed updates: {$processed}");
+    }
+
+    if ($action === 'config-check') {
+        $result = [
+            'telegram_bot_token' => trim((string) ($config['telegram_bot_token'] ?? '')) !== '',
+            'telegram_admin_ids' => (string) ($config['telegram_admin_ids'] ?? ''),
+            'telegram_webhook_secret' => trim((string) ($config['telegram_webhook_secret'] ?? '')) !== '',
+            'github_token' => trim((string) ($config['github_token'] ?? '')) !== '',
+            'github_repository' => (string) ($config['github_repository'] ?? ''),
+            'github_workflow_id' => (string) ($config['github_workflow_id'] ?? ''),
+            'github_ref' => (string) ($config['github_ref'] ?? ''),
+            'http_timeout' => (int) ($config['http_timeout'] ?? 15),
+            'http_connect_timeout' => (int) ($config['http_connect_timeout'] ?? 5),
+        ];
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        exit;
+    }
+
+    plain_response('Unknown action', 404);
 }
 
 function handle_update(array $config, array $update): void
@@ -265,12 +422,27 @@ function handle_update(array $config, array $update): void
     }
 
     if ($text === '/start' || $text === '/menu') {
-        send_message($config, $chatId, 'Выбери действие. Сейчас доступна одна кнопка: отчёт по Gmail.');
+        send_message($config, $chatId, 'Выбери действие на клавиатуре. Сейчас полностью подключена кнопка почты.');
         return;
     }
 
-    if ($text !== BUTTON_TEXT) {
-        send_message($config, $chatId, 'Нажми кнопку, чтобы запустить отчёт по Gmail.');
+    if ($text === BUTTON_GITHUB) {
+        send_message($config, $chatId, 'Кнопка GitHub добавлена. Следующий шаг — подключить анализ репозитория и шаблон поста.');
+        return;
+    }
+
+    if ($text === BUTTON_VIDEO) {
+        send_message($config, $chatId, 'Кнопка видео добавлена. Следующий шаг — подключить приём сырого видео и подготовку поста.');
+        return;
+    }
+
+    if ($text === BUTTON_WEATHER) {
+        send_message($config, $chatId, 'Кнопка погоды добавлена. Следующий шаг — подключить анализ погоды, генерацию фото и пост в канал.');
+        return;
+    }
+
+    if ($text !== BUTTON_GMAIL) {
+        send_message($config, $chatId, 'Выбери действие кнопкой под строкой ввода.');
         return;
     }
 
@@ -280,21 +452,19 @@ function handle_update(array $config, array $update): void
         return;
     }
 
-    send_message($config, $chatId, 'Запускаю анализ Gmail. Пост придёт в канал после завершения workflow.');
-    dispatch_gmail_workflow($config);
+    dispatch_gmail_workflow($config, $chatId);
     mark_cooldown($config, $userId);
-    send_message($config, $chatId, 'GitHub Actions запущен. Доставка в Telegram будет подтверждена внутри workflow.');
+    send_message($config, $chatId, 'Отправлен запрос на отчёт.');
 }
 
 $config = load_config();
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
-    if (isset($_GET['health'])) {
-        header('Content-Type: text/plain; charset=utf-8');
-        echo 'OK';
-        exit;
+    try {
+        handle_get_action($config);
+    } catch (Throwable $error) {
+        plain_response('GET action error: ' . $error->getMessage(), 500);
     }
-    fail(200, 'GCodRevit Telegram webhook is ready.');
 }
 
 assert_required_config($config);
