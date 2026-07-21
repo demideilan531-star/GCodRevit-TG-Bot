@@ -1,0 +1,15 @@
+name: Check Telegram Webhook
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-webhook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check webhook info
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
