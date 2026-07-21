@@ -13,3 +13,8 @@ jobs:
         run: |
           set -euo pipefail
           curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
+
+      - name: Check hosting from GitHub runner
+        run: |
+          set -euo pipefail
+          curl -v --max-time 20 "https://tgbotgcodrevit.ru/telegram-webhook.php?health=1"
