@@ -1,0 +1,39 @@
+name: Set Telegram Webhook
+
+on:
+  workflow_dispatch:
+    inputs:
+      webhook_url:
+        description: "Telegram webhook URL"
+        required: true
+        default: "https://tgbotgcodrevit.ru/telegram-webhook.php"
+      webhook_secret:
+        description: "Telegram webhook secret from hosting config"
+        required: true
+
+jobs:
+  set-webhook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set webhook
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          WEBHOOK_URL: ${{ inputs.webhook_url }}
+          WEBHOOK_SECRET: ${{ inputs.webhook_secret }}
+        run: |
+          set -euo pipefail
+          response="$(
+            curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+              --data-urlencode "url=${WEBHOOK_URL}" \
+              --data-urlencode "secret_token=${WEBHOOK_SECRET}" \
+              --data-urlencode "drop_pending_updates=true"
+          )"
+          echo "$response"
+          echo "$response" | python3 -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if data.get("ok") else 1)'
+
+      - name: Check webhook
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
