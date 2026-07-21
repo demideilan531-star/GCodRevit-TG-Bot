@@ -7,9 +7,6 @@ on:
         description: "Telegram webhook URL"
         required: true
         default: "https://tgbotgcodrevit.ru/telegram-webhook.php"
-      webhook_secret:
-        description: "Telegram webhook secret from hosting config"
-        required: true
 
 jobs:
   set-webhook:
@@ -19,7 +16,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           WEBHOOK_URL: ${{ inputs.webhook_url }}
-          WEBHOOK_SECRET: ${{ inputs.webhook_secret }}
+          WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
           response="$(
