@@ -16,7 +16,10 @@ import urllib.parse
 import urllib.request
 
 
-BUTTON_TEXT = "📬 Отчёт по Gmail"
+BUTTON_GMAIL = "📬 Отчёт Gmail"
+BUTTON_GITHUB = "🧩 GitHub"
+BUTTON_VIDEO = "🎬 Видео GCodRevit"
+BUTTON_WEATHER = "🌤 Погода"
 DEFAULT_REPOSITORY = "demideilan531-star/GCodRevit-TG-Bot"
 DEFAULT_WORKFLOW = "hourly-gmail-telegram.yml"
 DEFAULT_REF = "main"
@@ -54,7 +57,10 @@ def send_message(token: str, chat_id: int | str, text: str, with_keyboard: bool 
     payload: dict = {"chat_id": str(chat_id), "text": text}
     if with_keyboard:
         payload["reply_markup"] = {
-            "keyboard": [[{"text": BUTTON_TEXT}]],
+            "keyboard": [
+                [{"text": BUTTON_GMAIL}, {"text": BUTTON_GITHUB}],
+                [{"text": BUTTON_VIDEO}, {"text": BUTTON_WEATHER}],
+            ],
             "resize_keyboard": True,
             "one_time_keyboard": False,
             "is_persistent": True,
@@ -84,7 +90,7 @@ def is_allowed(user_id: int, admin_ids: set[int], allow_all_users: bool) -> bool
     return allow_all_users or user_id in admin_ids
 
 
-def dispatch_gmail_workflow() -> None:
+def dispatch_gmail_workflow(notify_chat_id: int | str) -> None:
     github_token = env("GITHUB_TOKEN") or env("GH_PAT")
     if not github_token:
         raise BotError("Не задан GITHUB_TOKEN или GH_PAT для запуска GitHub Actions.")
@@ -92,7 +98,14 @@ def dispatch_gmail_workflow() -> None:
     repository = env("GITHUB_REPOSITORY", DEFAULT_REPOSITORY)
     workflow = env("GMAIL_WORKFLOW_ID", DEFAULT_WORKFLOW)
     ref = env("GITHUB_REF", DEFAULT_REF)
-    body = json.dumps({"ref": ref}).encode("utf-8")
+    body = json.dumps(
+        {
+            "ref": ref,
+            "inputs": {
+                "notify_chat_id": str(notify_chat_id),
+            },
+        }
+    ).encode("utf-8")
     request = urllib.request.Request(
         f"https://api.github.com/repos/{repository}/actions/workflows/{workflow}/dispatches",
         data=body,
@@ -140,12 +153,36 @@ def handle_message(
         send_message(
             token,
             chat_id,
-            "Выбери действие. Сейчас доступна одна кнопка: отчёт по Gmail.",
+            "Выбери действие на клавиатуре. Сейчас полностью подключена кнопка почты.",
         )
         return
 
-    if text != BUTTON_TEXT:
-        send_message(token, chat_id, "Нажми кнопку, чтобы запустить отчёт по Gmail.")
+    if text == BUTTON_GITHUB:
+        send_message(
+            token,
+            chat_id,
+            "Кнопка GitHub добавлена. Следующий шаг — подключить анализ репозитория и шаблон поста.",
+        )
+        return
+
+    if text == BUTTON_VIDEO:
+        send_message(
+            token,
+            chat_id,
+            "Кнопка видео добавлена. Следующий шаг — подключить приём сырого видео и подготовку поста.",
+        )
+        return
+
+    if text == BUTTON_WEATHER:
+        send_message(
+            token,
+            chat_id,
+            "Кнопка погоды добавлена. Следующий шаг — подключить анализ погоды, генерацию фото и пост в канал.",
+        )
+        return
+
+    if text != BUTTON_GMAIL:
+        send_message(token, chat_id, "Выбери действие кнопкой под строкой ввода.")
         return
 
     cooldown_seconds = int(env("GMAIL_BUTTON_COOLDOWN_SECONDS", "300"))
@@ -157,17 +194,12 @@ def handle_message(
         return
 
     cooldown[int(user_id)] = now
-    send_message(token, chat_id, "Запускаю анализ Gmail. Пост придёт в канал после завершения workflow.")
     try:
-        dispatch_gmail_workflow()
+        dispatch_gmail_workflow(chat_id)
     except BotError:
         cooldown.pop(int(user_id), None)
         raise
-    send_message(
-        token,
-        chat_id,
-        "GitHub Actions запущен. Доставка в Telegram будет подтверждена внутри workflow.",
-    )
+    send_message(token, chat_id, "Отправлен запрос на отчёт.")
 
 
 def main() -> int:
