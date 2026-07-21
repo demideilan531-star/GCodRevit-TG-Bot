@@ -1,0 +1,47 @@
+name: Telegram Poll Bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: telegram-poll-bot
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Poll Telegram once
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_IDS: "1839693017"
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GITHUB_REPOSITORY: demideilan531-star/GCodRevit-TG-Bot
+          GITHUB_REF_NAME: main
+          GMAIL_WORKFLOW_ID: hourly-gmail-telegram.yml
+        run: python3 scripts/telegram_poll_once.py
+
+      - name: Save Telegram offset
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- bot-state/telegram-offset.txt; then
+            echo "No offset change"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bot-state/telegram-offset.txt
+          git commit -m "Update Telegram polling offset"
+          git push
