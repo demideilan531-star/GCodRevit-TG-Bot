@@ -2,7 +2,7 @@ name: Hourly Gmail Report to Telegram
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 */2 * * *"
   workflow_dispatch:
     inputs:
       notify_chat_id:
@@ -41,7 +41,7 @@ jobs:
           GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          REPORT_CHAT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_chat_id || secrets.TELEGRAM_CHAT_ID }}
+          REPORT_CHAT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_chat_id || '1839693017' }}
         run: |
           missing=0
           for name in GMAIL_EMAIL GMAIL_APP_PASSWORD TELEGRAM_BOT_TOKEN REPORT_CHAT_ID; do
@@ -57,7 +57,7 @@ jobs:
           GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           REPORT_TIMEZONE: Europe/Moscow
-          LOOKBACK_MINUTES: "65"
+          LOOKBACK_MINUTES: "125"
           ONE_TIME_LABEL: Одноразовые письма
         run: python scripts/hourly_gmail_report.py
 
@@ -65,7 +65,7 @@ jobs:
         id: publish_report
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          REPORT_CHAT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_chat_id || secrets.TELEGRAM_CHAT_ID }}
+          REPORT_CHAT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_chat_id || '1839693017' }}
         run: |
           set -euo pipefail
           response=$(curl --silent --show-error --fail-with-body \
