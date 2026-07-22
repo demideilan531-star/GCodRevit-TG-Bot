@@ -133,7 +133,7 @@ def build(items,archived,warnings):
     now=datetime.now(TZ); start=now-timedelta(minutes=MINUTES); important=[x for x in items if x['important']]
     m={'technical':sum(x['cat']=='technical' for x in items),'work':sum(x['cat']=='work' for x in items),'invitation':sum(x['cat']=='invitation' for x in items),'finance':sum(x['cat']=='finance' for x in items),'security':sum(x['cat']=='security' for x in items),'one_time':len(archived),'important':len(important),'total':len(items)}
     lines=[f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Период: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Новых писем за последние {MINUTES} минут: {len(items)}",'']
-    if not items: lines+=['За последний час новых писем нет.','']
+    if not items: lines+=['За выбранный период новых писем нет.','']
     elif important:
         lines+=['ВАЖНЫЕ ПИСЬМА']
         for i,x in enumerate(important,1):
@@ -143,7 +143,7 @@ def build(items,archived,warnings):
     if warnings: lines += ['','ПРЕДУПРЕЖДЕНИЯ']+[f'• {w}' for w in warnings[:5]]
     if important: conclusion,action=important[0]['summary'],important[0]['action']
     elif items: conclusion,action='Письма получены, но срочных действий не требуется.','Просмотреть информационные письма при необходимости.'
-    else: conclusion,action='За последний час новых писем нет.','Действий не требуется.'
+    else: conclusion,action='За выбранный период новых писем нет.','Действий не требуется.'
     return '\n'.join(lines).strip()+'\n',m,conclusion,action
 
 def fonts():
