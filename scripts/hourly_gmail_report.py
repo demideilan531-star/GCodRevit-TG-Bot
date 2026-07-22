@@ -132,7 +132,7 @@ def sender_short(s): return re.sub(r'\s*<[^>]+>\s*','',s).strip().strip('"') or 
 def build(items,archived,warnings):
     now=datetime.now(TZ); start=now-timedelta(minutes=MINUTES); important=[x for x in items if x['important']]
     m={'technical':sum(x['cat']=='technical' for x in items),'work':sum(x['cat']=='work' for x in items),'invitation':sum(x['cat']=='invitation' for x in items),'finance':sum(x['cat']=='finance' for x in items),'security':sum(x['cat']=='security' for x in items),'one_time':len(archived),'important':len(important),'total':len(items)}
-    lines=[f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Период: {start.strftime('%H:%M')}–{now.strftime('%H:%M')} МСК",f"Новых писем за последние {MINUTES} минут: {len(items)}",'']
+    lines=[f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Период: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Новых писем за последние {MINUTES} минут: {len(items)}",'']
     if not items: lines+=['За последний час новых писем нет.','']
     elif important:
         lines+=['ВАЖНЫЕ ПИСЬМА']
@@ -161,7 +161,7 @@ def wrap(draw,xy,text,font,color,width,limit=2):
     for line in lines: draw.text((x,y),line,font=font,fill=color); y+=35
 
 def render(report,m,conclusion,action):
-    f=fonts(); W,H=1080,1350; img=Image.new('RGB',(W,H),'#07111f'); d=ImageDraw.Draw(img)
+    f=fonts(); W,H=1080,1175; img=Image.new('RGB',(W,H),'#07111f'); d=ImageDraw.Draw(img)
     for y in range(H):
         t=y/(H-1); d.line((0,y,W,y),fill=(7+int(11*t),17+int(18*t),31+int(28*t)))
     for x,w,h in [(0,80,240),(95,115,210),(220,95,235),(335,130,190),(475,90,230),(590,120,200),(735,100,220),(860,140,180),(1000,80,240)]:
@@ -169,11 +169,11 @@ def render(report,m,conclusion,action):
         for wx in range(x+15,min(x+w-10,W),25):
             for wy in range(top+18,248,27): d.rectangle((wx,wy,wx+6,wy+9),fill='#244763')
     d.polygon([(0,1180),(1080,1080),(1080,1350),(0,1350)],fill='#07101a'); d.rounded_rectangle((635,965,1015,1195),18,fill='#111b28',outline='#42556b',width=3); d.rectangle((665,995,985,1160),fill='#162c40'); d.polygon([(605,1195),(1035,1195),(1080,1240),(560,1240)],fill='#172230')
-    d.rounded_rectangle((42,38,1038,1295),30,fill='#0a1828',outline='#33506b',width=2); d.rounded_rectangle((68,64,1012,190),26,fill='#0d2138',outline='#2a86ff',width=3)
+    d.rounded_rectangle((42,38,1038,1150),30,fill='#0a1828',outline='#33506b',width=2); d.rounded_rectangle((68,64,1012,190),26,fill='#0d2138',outline='#2a86ff',width=3)
     d.rounded_rectangle((92,88,156,152),14,fill='#e94646'); d.polygon([(99,99),(124,122),(149,99),(149,112),(124,134),(99,112)],fill='white'); d.text((180,77),'ОТЧЁТ ПО GMAIL',font=f['title'],fill='white')
-    checked=report.splitlines()[0].replace('Проверка Gmail: ',''); d.text((184,147),checked,font=f['sub'],fill='#a9c8e8'); d.rounded_rectangle((760,93,986,146),18,fill='#133954',outline='#55b9ff',width=2); d.text((785,108),'GMAIL MONITOR BOT',font=f['small'],fill='#b9e2ff')
-    period=next((x.replace('Период: ','') for x in report.splitlines() if x.startswith('Период: ')),f'последние {MINUTES} минут'); d.rounded_rectangle((68,218,1012,294),20,fill='#0c2339',outline='#284c6a',width=2); d.text((98,240),f'ПЕРИОД: {period}',font=f['card'],fill='#d5e9fa')
-    d.rounded_rectangle((68,322,500,542),26,fill='#0c3153',outline='#3ca6ff',width=3); d.text((98,350),'НОВЫХ ПИСЕМ',font=f['card'],fill='#9bd5ff'); d.text((98,387),str(m['total']),font=f['big'],fill='#69e19a' if m['total']==0 else 'white'); d.text((98,487),f'за последние {MINUTES} минут',font=f['small'],fill='#d5ebff')
+    
+    period=next((x.replace('Период: ','') for x in report.splitlines() if x.startswith('Период: ')),f'последние {MINUTES} минут'); d.rounded_rectangle((68,218,1012,294),20,fill='#0c2339',outline='#284c6a',width=2); d.text((98,240),f'ПЕРИОД: {period}',font=f['body'],fill='#d5e9fa')
+    d.rounded_rectangle((68,322,500,542),26,fill='#0c3153',outline='#3ca6ff',width=3); d.text((98,350),'НОВЫХ ПИСЕМ',font=f['card'],fill='#9bd5ff'); d.text((98,397),str(m['total']),font=f['big'],fill='#69e19a' if m['total']==0 else 'white')
     if m['important']: fill,outline,title,label,text='#3a2118','#ff6b57','#ff8d79','ТРЕБУЕТ ВНИМАНИЯ',f"Важных писем: {m['important']}"
     else: fill,outline,title,label,text='#173024','#45c777','#78e5a0','СТАТУС','Срочных действий не требуется'
     d.rounded_rectangle((530,322,1012,542),26,fill=fill,outline=outline,width=3); d.text((562,351),label,font=f['card'],fill=title); wrap(d,(562,410),text,f['bold'],'white',30,3)
@@ -181,7 +181,7 @@ def render(report,m,conclusion,action):
     for label,value,accent in rows:
         d.rounded_rectangle((68,y,1012,y+82),19,fill='#0b1d30',outline='#294b69',width=2); d.ellipse((92,y+21,132,y+61),fill=accent); d.text((158,y+23),label,font=f['bold'],fill='#dbeafb'); d.rounded_rectangle((906,y+18,978,y+64),16,fill='#102b45'); d.text((942,y+25),str(value),font=f['bold'],fill='white',anchor='mm'); y+=94
     d.rounded_rectangle((68,1044,1012,1130),20,fill='#0d2740',outline='#3d93cc',width=2); d.text((98,1069),'ОДНОРАЗОВЫЕ ПИСЬМА',font=f['bold'],fill='#9bd5ff'); d.text((626,1069),f"Перемещено: {m['one_time']}",font=f['bold'],fill='white')
-    d.rounded_rectangle((68,1152,1012,1263),22,fill='#10253a',outline='#2a86ff',width=2); wrap(d,(98,1171),conclusion,f['bold'],'white',65,2); wrap(d,(98,1222),'Действие: '+action,f['small'],'#9fd7ff',88,2)
+    
     img.save(IMAGE,optimize=True,quality=92)
 
 def caption(report,m,conclusion,action):
@@ -190,7 +190,7 @@ def caption(report,m,conclusion,action):
     CAPTION.write_text(text[:997].rstrip()+'…' if len(text)>1000 else text,encoding='utf-8')
 
 def error_report(err):
-    now=datetime.now(TZ); start=now-timedelta(minutes=MINUTES); report=f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК\nПериод: {start.strftime('%H:%M')}–{now.strftime('%H:%M')} МСК\nНовых писем за последние {MINUTES} минут: 0\n\nОШИБКА ПРОВЕРКИ\nСуть: {err}\nДействие: проверить секреты Gmail и журнал GitHub Actions.\n\nИТОГ\nСрочные/технические письма: 1\nОтветы по работе/учёбе: 0\nПриглашения: 0\nФинансовые вопросы: 0\nУгрозы безопасности: 0\nОдноразовые письма: 0\n"; m={'technical':1,'work':0,'invitation':0,'finance':0,'security':0,'one_time':0,'important':1,'total':0}; return report,m,'Не удалось получить данные Gmail.','Проверить секреты GMAIL_EMAIL и GMAIL_APP_PASSWORD.'
+    now=datetime.now(TZ); start=now-timedelta(minutes=MINUTES); report=f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК\nПериод: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК\nНовых писем за последние {MINUTES} минут: 0\n\nОШИБКА ПРОВЕРКИ\nСуть: {err}\nДействие: проверить секреты Gmail и журнал GitHub Actions.\n\nИТОГ\nСрочные/технические письма: 1\nОтветы по работе/учёбе: 0\nПриглашения: 0\nФинансовые вопросы: 0\nУгрозы безопасности: 0\nОдноразовые письма: 0\n"; m={'technical':1,'work':0,'invitation':0,'finance':0,'security':0,'one_time':0,'important':1,'total':0}; return report,m,'Не удалось получить данные Gmail.','Проверить секреты GMAIL_EMAIL и GMAIL_APP_PASSWORD.'
 
 def main():
     try: report,m,conclusion,action=build(*fetch())
