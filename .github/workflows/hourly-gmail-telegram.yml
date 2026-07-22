@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       notify_chat_id:
-        description: "Telegram chat_id for completion notification"
+        description: "Telegram chat_id that receives the report and completion notification"
         required: false
         type: string
 
@@ -41,10 +41,10 @@ jobs:
           GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPORT_CHAT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_chat_id || secrets.TELEGRAM_CHAT_ID }}
         run: |
           missing=0
-          for name in GMAIL_EMAIL GMAIL_APP_PASSWORD TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
+          for name in GMAIL_EMAIL GMAIL_APP_PASSWORD TELEGRAM_BOT_TOKEN REPORT_CHAT_ID; do
             if [ -z "${!name:-}" ]; then
               echo "::error::Repository secret ${name} is not configured"
               missing=1
@@ -65,7 +65,7 @@ jobs:
         id: publish_report
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPORT_CHAT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_chat_id || secrets.TELEGRAM_CHAT_ID }}
         run: |
           set -euo pipefail
           response=$(curl --silent --show-error --fail-with-body \
@@ -73,7 +73,7 @@ jobs:
             --max-time 120 \
             --request POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
-            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "chat_id=${REPORT_CHAT_ID}" \
             -F "photo=@/tmp/gmail_report.png" \
             --form-string "caption=$(cat /tmp/gmail_caption.txt)")
 
@@ -98,7 +98,7 @@ jobs:
 
           if [ "${REPORT_SENT}" = "true" ]; then
             if grep -q "ОШИБКА ПРОВЕРКИ" reports/latest.txt; then
-              message="⚠️ Отчёт отправлен, но Gmail вернул ошибку проверки. Проверь пост в канале."
+              message="⚠️ Отчёт отправлен, но Gmail вернул ошибку проверки. Проверь отчёт выше."
             else
               message="✅ Отчёт отправлен."
             fi
