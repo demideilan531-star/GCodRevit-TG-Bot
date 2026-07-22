@@ -1,0 +1,121 @@
+name: Video GCodRevit Post
+
+on:
+  workflow_dispatch:
+    inputs:
+      telegram_file_id:
+        description: "Telegram file_id of the source video"
+        required: true
+        type: string
+      notify_chat_id:
+        description: "Telegram chat_id for the completion message"
+        required: true
+        type: string
+      source_caption:
+        description: "Optional instructions attached to the source video"
+        required: false
+        type: string
+      source_file_name:
+        description: "Original source filename"
+        required: false
+        type: string
+      source_file_size:
+        description: "Original source size in bytes"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  models: read
+
+concurrency:
+  group: video-gcodrevit-${{ inputs.notify_chat_id }}
+  cancel-in-progress: false
+
+jobs:
+  analyze-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install FFmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+
+      - name: Cache speech recognition model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: faster-whisper-${{ runner.os }}-base-v1
+
+      - name: Install speech recognition
+        run: python -m pip install --quiet faster-whisper==1.2.1
+
+      - name: Validate configuration
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
+          SOURCE_FILE_SIZE: ${{ inputs.source_file_size }}
+        run: |
+          set -euo pipefail
+          for name in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID TELEGRAM_FILE_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} is not configured"
+              exit 1
+            fi
+          done
+          if [ -n "${SOURCE_FILE_SIZE:-}" ] && [ "${SOURCE_FILE_SIZE}" -gt 20971520 ]; then
+            echo "::error::Telegram Bot API cannot download files larger than 20 MB"
+            exit 1
+          fi
+
+      - name: Analyze video and publish post
+        id: process_video
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
+          SOURCE_CAPTION: ${{ inputs.source_caption }}
+          GITHUB_TOKEN: ${{ github.token }}
+          VIDEO_MODEL: openai/gpt-4.1-mini
+          WHISPER_MODEL_SIZE: base
+        run: python scripts/video_gcodrevit_post.py
+
+      - name: Notify requester
+        if: ${{ always() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          NOTIFY_CHAT_ID: ${{ inputs.notify_chat_id }}
+          PROCESS_OUTCOME: ${{ steps.process_video.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "${PROCESS_OUTCOME}" = "success" ]; then
+            message="✅ Видео обработано, пост опубликован в канале."
+          else
+            message="❌ Не удалось обработать видео. Проверь запуск Video GCodRevit Post в GitHub Actions."
+          fi
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${NOTIFY_CHAT_ID}" \
+            --data-urlencode "text=${message}" \
+            > /tmp/telegram_video_notify.json
+
+      - name: Mark failed processing
+        if: ${{ steps.process_video.outcome != 'success' }}
+        run: exit 1
