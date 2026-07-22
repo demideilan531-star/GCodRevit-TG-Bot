@@ -1,11 +1,6 @@
 name: Send Gmail Report Photo
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "reports/latest.txt"
   workflow_dispatch:
 
 permissions:
