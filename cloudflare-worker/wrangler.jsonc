@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gcodrevit-telegram-bot",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-21",
+  "workers_dev": true,
+  "keep_vars": true,
+  "vars": {
+    "TELEGRAM_ADMIN_IDS": "1839693017",
+    "GITHUB_REPOSITORY": "demideilan531-star/GCodRevit-TG-Bot",
+    "GITHUB_REF_NAME": "main",
+    "GMAIL_WORKFLOW_ID": "hourly-gmail-telegram.yml"
+  }
+}
