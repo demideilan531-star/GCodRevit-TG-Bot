@@ -1,0 +1,190 @@
+name: Publish Latest Gmail Report
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "reports/latest.txt"
+
+permissions:
+  contents: read
+  statuses: write
+  issues: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Pillow
+        run: python -m pip install --quiet pillow
+
+      - name: Generate Gmail report image
+        run: |
+          cat > /tmp/render_report.py <<'PY'
+          import re
+          from pathlib import Path
+          from PIL import Image, ImageDraw, ImageFont
+
+          report = Path('reports/latest.txt').read_text(encoding='utf-8').strip()
+
+          def value(pattern, default='0'):
+              match = re.search(pattern, report, re.IGNORECASE | re.MULTILINE)
+              return match.group(1).strip() if match else default
+
+          checked = value(r'^Проверка Gmail:\s*(.+)$', 'Текущее время')
+          period = value(r'^Провер(?:енный )?период:\s*(.+)$', 'Последние 24 часа')
+          total = value(r'^Новых (?:входящих )?писем(?:[^:]*):\s*(\d+)', '0')
+          technical = value(r'^Срочные/технические письма:\s*(\d+)', '0')
+          work = value(r'^Ответы по работе/уч[её]бе:\s*(\d+)', '0')
+          invites = value(r'^Приглашения:\s*(\d+)', '0')
+          finance = value(r'^Финансовые вопросы:\s*(\d+)', '0')
+          security = value(r'^Угрозы безопасности:\s*(\d+)', '0')
+          one_time = value(r'^Одноразовые письма:\s*(\d+)', '0')
+          main = value(r'^Главное:\s*(.+)$', 'Отчёт сформирован.')
+          has_error = 'ОШИБКА' in report
+
+          W, H = 1080, 1350
+          img = Image.new('RGB', (W, H), '#06101f')
+          draw = ImageDraw.Draw(img)
+          regular = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+          bold = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+          f_title = ImageFont.truetype(bold, 58)
+          f_sub = ImageFont.truetype(regular, 25)
+          f_big = ImageFont.truetype(bold, 112)
+          f_head = ImageFont.truetype(bold, 30)
+          f_body = ImageFont.truetype(regular, 25)
+          f_metric = ImageFont.truetype(bold, 42)
+          f_small = ImageFont.truetype(regular, 21)
+
+          for y in range(H):
+              t = y / H
+              draw.line((0, y, W, y), fill=(6 + int(10*t), 16 + int(17*t), 31 + int(28*t)))
+
+          def card(box, fill, outline):
+              draw.rounded_rectangle(box, radius=28, fill=fill, outline=outline, width=3)
+
+          def wrapped(text, max_chars, max_lines=3):
+              words = text.split()
+              lines, current = [], ''
+              for word in words:
+                  trial = (current + ' ' + word).strip()
+                  if len(trial) <= max_chars:
+                      current = trial
+                  else:
+                      if current: lines.append(current)
+                      current = word
+              if current: lines.append(current)
+              if len(lines) > max_lines:
+                  lines = lines[:max_lines]
+                  lines[-1] = lines[-1].rstrip(' .') + '…'
+              return lines
+
+          card((40, 35, 1040, 170), '#0d2138', '#2a86ff')
+          draw.text((75, 55), 'ОТЧЁТ ПО GMAIL', font=f_title, fill='white')
+          draw.text((78, 125), checked, font=f_sub, fill='#a9c8e8')
+
+          card((40, 200, 1040, 295), '#0a1b2d', '#345979')
+          draw.text((75, 225), 'ПЕРИОД', font=f_head, fill='#8fcfff')
+          draw.text((235, 227), period, font=f_body, fill='white')
+
+          card((40, 325, 500, 605), '#0c3153', '#3ca6ff')
+          draw.text((75, 360), 'НОВЫХ ПИСЕМ', font=f_head, fill='#79c6ff')
+          draw.text((75, 410), total, font=f_big, fill='white')
+          draw.text((75, 545), 'за проверенный период', font=f_body, fill='#cfe9ff')
+
+          alert_fill = '#3a1f26' if has_error or int(technical) or int(security) else '#17271f'
+          alert_outline = '#ff6b70' if has_error or int(technical) or int(security) else '#48c878'
+          alert_title = 'ТРЕБУЕТ ВНИМАНИЯ' if has_error or int(technical) or int(security) else 'ВСЁ СПОКОЙНО'
+          alert_color = '#ff8f93' if has_error or int(technical) or int(security) else '#72e59a'
+          card((530, 325, 1040, 605), alert_fill, alert_outline)
+          draw.text((565, 360), alert_title, font=f_head, fill=alert_color)
+          y = 420
+          for line in wrapped(main, 34, 4):
+              draw.text((565, y), line, font=f_body, fill='white')
+              y += 38
+
+          metrics = [
+              ('Срочные', technical, '#ff6767'),
+              ('Работа / учёба', work, '#5fb6ff'),
+              ('Приглашения', invites, '#ae82ff'),
+              ('Финансы', finance, '#ffd466'),
+              ('Безопасность', security, '#59d887'),
+              ('Одноразовые', one_time, '#65d4e8'),
+          ]
+          positions = [(40,650),(550,650),(40,820),(550,820),(40,990),(550,990)]
+          for (label, number, color), (x,y) in zip(metrics, positions):
+              card((x, y, x+490, y+135), '#0b1d31', '#294b68')
+              draw.text((x+30, y+28), label, font=f_body, fill='#b7d4ec')
+              draw.text((x+400, y+24), str(number), font=f_metric, fill=color, anchor='ra')
+
+          card((40, 1165, 1040, 1285), '#0a1b2d', '#345979')
+          footer = 'Есть ошибка обработки — подробности в подписи.' if has_error else 'Отчёт сформирован автоматически. Действия указаны в подписи.'
+          draw.text((75, 1200), footer, font=f_body, fill='white')
+          draw.text((75, 1250), 'GMAIL MONITOR BOT', font=f_small, fill='#7899b8')
+
+          img.save('/tmp/gmail_report.png', optimize=True)
+          Path('/tmp/gmail_caption.txt').write_text(report[:1024], encoding='utf-8')
+          PY
+          python /tmp/render_report.py
+
+      - name: Send photo and report to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          response=$(curl --silent --show-error \
+            --connect-timeout 20 \
+            --max-time 120 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "photo=@/tmp/gmail_report.png" \
+            --form-string "caption=$(cat /tmp/gmail_caption.txt)")
+
+          ok=$(printf '%s' "$response" | jq -r '.ok // false')
+          if [ "$ok" = "true" ]; then
+            message_id=$(printf '%s' "$response" | jq -r '.result.message_id')
+            state='success'
+            description="Telegram photo message_id=${message_id}"
+            comment="✅ Gmail-отчёт с фотографией и текстом опубликован. message_id=${message_id}"
+          else
+            error_text=$(printf '%s' "$response" | jq -r '.description // "Telegram rejected the request"')
+            state='failure'
+            description="Telegram: ${error_text}"
+            comment="❌ Gmail-отчёт не опубликован: ${error_text}"
+          fi
+
+          description=$(printf '%.130s' "$description")
+          jq -n --arg state "$state" --arg context 'telegram-gmail-report' --arg description "$description" \
+            '{state:$state,context:$context,description:$description}' > /tmp/status.json
+          curl --silent --show-error --fail-with-body \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --request POST \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            --data-binary @/tmp/status.json >/dev/null
+
+          jq -n --arg body "$comment" '{body:$body}' > /tmp/comment.json
+          curl --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --request POST \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/1/comments" \
+            --data-binary @/tmp/comment.json >/dev/null || true
+
+          [ "$state" = "success" ]
