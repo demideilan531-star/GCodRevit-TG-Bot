@@ -174,8 +174,12 @@ def render(report,m,conclusion,action):
     
     period=next((x.replace('Период: ','') for x in report.splitlines() if x.startswith('Период: ')),f'последние {MINUTES} минут'); d.rounded_rectangle((68,218,1012,294),20,fill='#0c2339',outline='#284c6a',width=2); d.text((98,240),f'ПЕРИОД: {period}',font=f['body'],fill='#d5e9fa')
     d.rounded_rectangle((68,322,500,542),26,fill='#0c3153',outline='#3ca6ff',width=3); d.text((98,350),'НОВЫХ ПИСЕМ',font=f['card'],fill='#9bd5ff'); d.text((98,397),str(m['total']),font=f['big'],fill='#69e19a' if m['total']==0 else 'white')
-    if m['important']: fill,outline,title,label,text='#3a2118','#ff6b57','#ff8d79','ТРЕБУЕТ ВНИМАНИЯ',f"Важных писем: {m['important']}"
-    else: fill,outline,title,label,text='#173024','#45c777','#78e5a0','СТАТУС','Срочных действий не требуется'
+    if 'ОШИБКА ПРОВЕРКИ' in report:
+        fill,outline,title,label,text='#3a2118','#ff6b57','#ff8d79','ОШИБКА GMAIL','Проверка почты не выполнена'
+    elif m['important']:
+        fill,outline,title,label,text='#3a2118','#ff6b57','#ff8d79','ТРЕБУЕТ ВНИМАНИЯ',f"Важных писем: {m['important']}"
+    else:
+        fill,outline,title,label,text='#173024','#45c777','#78e5a0','СТАТУС','Срочных действий не требуется'
     d.rounded_rectangle((530,322,1012,542),26,fill=fill,outline=outline,width=3); d.text((562,351),label,font=f['card'],fill=title); wrap(d,(562,410),text,f['bold'],'white',30,3)
     rows=[('СРОЧНЫЕ / ТЕХНИЧЕСКИЕ',m['technical'],'#ff6767'),('РАБОТА / УЧЁБА',m['work'],'#55c98a'),('ПРИГЛАШЕНИЯ',m['invitation'],'#a17aff'),('ФИНАНСЫ',m['finance'],'#ffc34a'),('БЕЗОПАСНОСТЬ',m['security'],'#ff6b62' if m['security'] else '#55c98a')]; y=574
     for label,value,accent in rows:
@@ -190,7 +194,14 @@ def caption(report,m,conclusion,action):
     CAPTION.write_text(text[:997].rstrip()+'…' if len(text)>1000 else text,encoding='utf-8')
 
 def error_report(err):
-    now=datetime.now(TZ); start=now-timedelta(minutes=MINUTES); report=f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК\nПериод: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК\nНовых писем за последние {MINUTES} минут: 0\n\nОШИБКА ПРОВЕРКИ\nСуть: {err}\nДействие: проверить секреты Gmail и журнал GitHub Actions.\n\nИТОГ\nСрочные/технические письма: 1\nОтветы по работе/учёбе: 0\nПриглашения: 0\nФинансовые вопросы: 0\nУгрозы безопасности: 0\nОдноразовые письма: 0\n"; m={'technical':1,'work':0,'invitation':0,'finance':0,'security':0,'one_time':0,'important':1,'total':0}; return report,m,'Не удалось получить данные Gmail.','Проверить секреты GMAIL_EMAIL и GMAIL_APP_PASSWORD.'
+    now=datetime.now(TZ)
+    start=now-timedelta(minutes=MINUTES)
+    auth_failed='AUTHENTICATIONFAILED' in str(err) or 'Invalid credentials' in str(err)
+    conclusion='Google отклонил пароль приложения Gmail.' if auth_failed else 'Не удалось получить данные Gmail.'
+    action='Создать новый пароль приложения Google и обновить GMAIL_APP_PASSWORD.' if auth_failed else 'Проверить секреты Gmail и журнал GitHub Actions.'
+    report=f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК\nПериод: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК\nНовых писем за последние {MINUTES} минут: 0\n\nОШИБКА ПРОВЕРКИ\nСуть: {err}\nДействие: {action}\n\nИТОГ\nСрочные/технические письма: 0\nОтветы по работе/учёбе: 0\nПриглашения: 0\nФинансовые вопросы: 0\nУгрозы безопасности: 0\nОдноразовые письма: 0\n"
+    m={'technical':0,'work':0,'invitation':0,'finance':0,'security':0,'one_time':0,'important':0,'total':0}
+    return report,m,conclusion,action
 
 def main():
     try: report,m,conclusion,action=build(*fetch())
