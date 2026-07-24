@@ -1,0 +1,189 @@
+name: Send Gmail Report Photo
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "reports/latest.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gmail-report-photo
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate Gmail report image and caption
+        run: |
+          python -m pip install --quiet pillow
+          cat > /tmp/make_gmail_report.py <<'PY'
+          import re
+          from pathlib import Path
+          from textwrap import wrap
+          from PIL import Image, ImageDraw, ImageFont
+
+          report_path = Path('reports/latest.txt')
+          report = report_path.read_text(encoding='utf-8').strip()
+          if not report:
+              raise SystemExit('reports/latest.txt is empty')
+
+          def extract(pattern: str, default: str = '0') -> str:
+              match = re.search(pattern, report, flags=re.IGNORECASE | re.MULTILINE)
+              return match.group(1).strip() if match else default
+
+          checked = extract(r'^Проверка Gmail:\s*(.+)$', 'Время не указано')
+          period = extract(r'^Провер(?:енный период|ка периода|Период):\s*(.+)$', 'Последние 24 часа')
+          new_count = extract(r'^Новых писем(?:[^:]*):\s*(\d+)', '0')
+          urgent = extract(r'^Срочные/технические письма:\s*(\d+)', '0')
+          work = extract(r'^Ответы по работе/уч[её]бе:\s*(\d+)', '0')
+          invites = extract(r'^Приглашения:\s*(\d+)', '0')
+          finance = extract(r'^Финансовые вопросы:\s*(\d+)', '0')
+          security = extract(r'^Угрозы безопасности:\s*(\d+)', '0')
+          one_time = extract(r'^Одноразовые письма:\s*(\d+)', '0')
+
+          no_mail = 'новых писем нет' in report.lower()
+          if no_mail:
+              headline = 'ВСЁ СПОКОЙНО'
+              summary = 'За последние 24 часа новых писем нет. Действий не требуется.'
+              accent = '#54d98c'
+          elif int(security) > 0:
+              headline = 'НУЖНО ПРОВЕРИТЬ'
+              summary = f'Обнаружено угроз безопасности: {security}. Проверьте важные письма.'
+              accent = '#ff626b'
+          elif int(urgent) > 0:
+              headline = 'ТРЕБУЕТ ВНИМАНИЯ'
+              summary = f'Срочных или технических писем: {urgent}. Откройте подробный отчёт.'
+              accent = '#ffbd4a'
+          else:
+              headline = 'ЕСТЬ НОВЫЕ ПИСЬМА'
+              summary = f'Получено новых писем: {new_count}. Подробности указаны в подписи.'
+              accent = '#54a8ff'
+
+          W, H = 1080, 1350
+          img = Image.new('RGB', (W, H), '#07111f')
+          d = ImageDraw.Draw(img)
+
+          regular_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+          bold_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+          regular = lambda size: ImageFont.truetype(regular_path, size)
+          bold = lambda size: ImageFont.truetype(bold_path, size)
+
+          # Soft vertical gradient.
+          for y in range(H):
+              t = y / H
+              d.line((0, y, W, y), fill=(7 + int(7*t), 17 + int(17*t), 31 + int(28*t)))
+
+          # Subtle city/window silhouette.
+          d.rectangle((0, 0, W, 250), fill='#091727')
+          for x, height in [(20,110),(105,170),(190,130),(275,200),(385,155),(475,215),(585,145),(680,195),(790,125),(875,180),(970,150)]:
+              d.rectangle((x, 250-height, x+70, 250), fill='#0d2237')
+              for wy in range(250-height+18, 240, 32):
+                  d.rectangle((x+14, wy, x+23, wy+9), fill='#1d4b6d')
+                  d.rectangle((x+42, wy, x+51, wy+9), fill='#25445d')
+
+          # Header.
+          d.rounded_rectangle((45, 40, 1035, 185), radius=26, fill='#10253b', outline='#2b83df', width=3)
+          d.text((82, 63), 'ОТЧЁТ ПО GMAIL', font=bold(62), fill='white')
+          d.text((84, 135), checked, font=regular(28), fill='#b4d1ec')
+
+          # Period card.
+          d.rounded_rectangle((45, 215, 1035, 315), radius=24, fill='#0c1d30', outline='#2d4a63', width=2)
+          d.text((75, 238), 'ПЕРИОД ПРОВЕРКИ', font=bold(25), fill='#72b8f3')
+          period_lines = wrap(period, 62)
+          d.text((75, 273), period_lines[0], font=regular(24), fill='white')
+
+          # Count and headline cards.
+          d.rounded_rectangle((45, 345, 485, 610), radius=28, fill='#0d3151', outline='#3c9cf4', width=3)
+          d.text((78, 377), 'НОВЫХ ПИСЕМ', font=bold(30), fill='#8acaff')
+          d.text((78, 430), new_count, font=bold(115), fill='white')
+
+          d.rounded_rectangle((515, 345, 1035, 610), radius=28, fill='#12263a', outline=accent, width=3)
+          d.text((550, 378), headline, font=bold(32), fill=accent)
+          y = 435
+          for line in wrap(summary, 34):
+              d.text((550, y), line, font=regular(27), fill='white')
+              y += 40
+
+          # Category rows.
+          categories = [
+              ('СРОЧНЫЕ / ТЕХНИЧЕСКИЕ', urgent, '#ff626b'),
+              ('РАБОТА / УЧЁБА', work, '#4e9fff'),
+              ('ПРИГЛАШЕНИЯ', invites, '#a979ff'),
+              ('ФИНАНСОВЫЕ ВОПРОСЫ', finance, '#f3c84a'),
+              ('УГРОЗЫ БЕЗОПАСНОСТИ', security, '#54d98c' if security == '0' else '#ff626b'),
+          ]
+          y = 650
+          for label, value, color in categories:
+              d.rounded_rectangle((45, y, 1035, y+92), radius=22, fill='#0c1e31', outline='#294762', width=2)
+              d.ellipse((76, y+27, 112, y+63), fill=color)
+              d.text((137, y+25), label, font=bold(27), fill='white')
+              d.text((948, y+21), value, font=bold(40), fill=color, anchor='ra')
+              y += 105
+
+          # One-time mail and footer.
+          d.rounded_rectangle((45, 1185, 1035, 1275), radius=22, fill='#0e2a3c', outline='#45a7d5', width=2)
+          d.text((78, 1208), 'ОДНОРАЗОВЫЕ ПИСЬМА', font=bold(27), fill='#8dd9ff')
+          d.text((950, 1203), one_time, font=bold(42), fill='white', anchor='ra')
+          d.text((50, 1305), 'GMAIL MONITOR BOT  ·  ежедневный отчёт', font=regular(22), fill='#7698b6')
+
+          img.save('/tmp/gmail_report.png', optimize=True)
+
+          # Telegram sendPhoto captions are limited to 1024 characters.
+          # Preserve the exact report whenever it fits; otherwise compact it deterministically.
+          caption = report
+          if len(caption) > 1024:
+              caption = (
+                  f'📬 Отчёт по Gmail\n\n'
+                  f'Проверка: {checked}\nПериод: {period}\n'
+                  f'Новых писем: {new_count}\n\n'
+                  f'Срочные/технические: {urgent}\nРабота/учёба: {work}\n'
+                  f'Приглашения: {invites}\nФинансы: {finance}\n'
+                  f'Угрозы безопасности: {security}\nОдноразовые письма: {one_time}\n\n'
+                  f'{summary}'
+              )
+          Path('/tmp/gmail_caption.txt').write_text(caption, encoding='utf-8')
+          PY
+          python /tmp/make_gmail_report.py
+
+      - name: Send photo and report to Telegram
+        id: send_photo
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "::error::TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not configured"
+            exit 1
+          fi
+
+          response=$(curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 120 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "photo=@/tmp/gmail_report.png" \
+            --form-string "caption=$(cat /tmp/gmail_caption.txt)")
+
+          printf '%s\n' "$response" > /tmp/telegram_response.json
+          ok=$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')
+          if [ "$ok" != "true" ]; then
+            echo "::error::Telegram did not accept the Gmail report"
+            cat /tmp/telegram_response.json
+            exit 1
+          fi
+
+          message_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin)["result"]["message_id"])')
+          echo "Telegram accepted the Gmail report. message_id=${message_id}"
