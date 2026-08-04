@@ -1,0 +1,133 @@
+name: Hourly Gmail Report to Telegram
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      notify_chat_id:
+        description: "Telegram chat_id that receives the report and completion notification"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hourly-gmail-report
+  cancel-in-progress: false
+
+jobs:
+  analyze-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pillow
+
+      - name: Validate required secrets
+        env:
+          GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          REPORT_CHAT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_chat_id || '1839693017' }}
+        run: |
+          missing=0
+          for name in GMAIL_EMAIL GMAIL_APP_PASSWORD TELEGRAM_BOT_TOKEN REPORT_CHAT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Repository secret ${name} is not configured"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Analyze Gmail and build report assets
+        env:
+          GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_TIMEZONE: Europe/Moscow
+          LOOKBACK_MINUTES: "125"
+          ONE_TIME_LABEL: Одноразовые письма
+        run: python scripts/hourly_gmail_report.py
+
+      - name: Publish one Telegram post with photo and caption
+        id: publish_report
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          REPORT_CHAT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_chat_id || '1839693017' }}
+        run: |
+          set -euo pipefail
+          response=$(curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 120 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            -F "chat_id=${REPORT_CHAT_ID}" \
+            -F "photo=@/tmp/gmail_report.png" \
+            --form-string "caption=$(cat /tmp/gmail_caption.txt)")
+
+          printf '%s\n' "$response" > /tmp/telegram_response.json
+          if [ "$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')" != "true" ]; then
+            echo "::error::Telegram did not accept the post"
+            cat /tmp/telegram_response.json
+            exit 1
+          fi
+
+          message_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin)["result"]["message_id"])')
+          echo "Telegram accepted the Gmail report. message_id=${message_id}"
+
+      - name: Notify requester
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.notify_chat_id != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          NOTIFY_CHAT_ID: ${{ inputs.notify_chat_id }}
+          REPORT_SENT: ${{ steps.publish_report.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+
+          if [ "${REPORT_SENT}" = "true" ]; then
+            if grep -q "ОШИБКА ПРОВЕРКИ" reports/latest.txt; then
+              message="⚠️ Отчёт отправлен, но Gmail вернул ошибку проверки. Проверь отчёт выше."
+            else
+              message="✅ Отчёт отправлен."
+            fi
+          else
+            message="❌ Не удалось отправить отчёт. Проверь GitHub Actions."
+          fi
+
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${NOTIFY_CHAT_ID}" \
+            --data-urlencode "text=${message}" \
+            > /tmp/telegram_notify_response.json
+
+      - name: Save latest report and processed-message state
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/latest.txt
+          if [ -f state/gmail_monitor.json ]; then
+            git add state/gmail_monitor.json
+          fi
+          if git diff --cached --quiet; then
+            echo "No report-state changes to commit."
+            exit 0
+          fi
+          git commit -m "Hourly Gmail report $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          git pull --rebase origin main
+          git push origin HEAD:main
