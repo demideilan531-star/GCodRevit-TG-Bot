@@ -1,0 +1,91 @@
+name: Weather Report On Demand
+
+on:
+  workflow_dispatch:
+    inputs:
+      notify_chat_id:
+        description: "Telegram chat_id that receives the weather report"
+        required: false
+        default: "1839693017"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weather-report
+  cancel-in-progress: false
+
+jobs:
+  weather-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pillow
+
+      - name: Validate required values
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          REPORT_CHAT_ID: ${{ inputs.notify_chat_id }}
+        run: |
+          missing=0
+          for name in TELEGRAM_BOT_TOKEN REPORT_CHAT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Required value ${name} is not configured"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Fetch Yandex Weather and build report
+        env:
+          WEATHER_URL: https://yandex.ru/pogoda/ru/moscow?lat=55.755863&lon=37.6177
+          REPORT_TIMEZONE: Europe/Moscow
+        run: python scripts/weather_report.py
+
+      - name: Send weather report to Telegram
+        id: publish_report
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          REPORT_CHAT_ID: ${{ inputs.notify_chat_id }}
+        run: |
+          set -euo pipefail
+          response=$(curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 120 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            -F "chat_id=${REPORT_CHAT_ID}" \
+            -F "photo=@/tmp/weather_report.png" \
+            --form-string "caption=$(cat /tmp/weather_caption.txt)")
+
+          if [ "$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')" != "true" ]; then
+            echo "::error::Telegram did not accept the weather report"
+            printf '%s\n' "$response"
+            exit 1
+          fi
+
+      - name: Notify about failure
+        if: ${{ always() && steps.publish_report.outcome != 'success' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          REPORT_CHAT_ID: ${{ inputs.notify_chat_id }}
+        run: |
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${REPORT_CHAT_ID}" \
+            --data-urlencode "text=❌ Не удалось подготовить прогноз погоды. Проверь GitHub Actions." \
+            > /tmp/weather_notify_response.json

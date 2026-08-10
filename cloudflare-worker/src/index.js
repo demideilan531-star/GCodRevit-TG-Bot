@@ -82,6 +82,11 @@ async function dispatchGmailWorkflow(env, chatId) {
   return dispatchWorkflow(env, workflow, { notify_chat_id: String(chatId) });
 }
 
+async function dispatchWeatherWorkflow(env, chatId) {
+  const workflow = env.WEATHER_WORKFLOW_ID || "weather-report.yml";
+  return dispatchWorkflow(env, workflow, { notify_chat_id: String(chatId) });
+}
+
 function videoAttachment(message) {
   if (message.video?.file_id) {
     return message.video;
@@ -125,7 +130,7 @@ async function handleUpdate(update, env, ctx) {
   }
 
   if (text === "/start" || text === "/menu") {
-    await sendMessage(env, chatId, "Выбери действие на клавиатуре. Подключены отчёт Gmail и обработка видео.");
+    await sendMessage(env, chatId, "Выбери действие на клавиатуре. Подключены Gmail, погода и обработка видео.");
     return;
   }
 
@@ -174,7 +179,12 @@ async function handleUpdate(update, env, ctx) {
   }
 
   if (text === BUTTON_WEATHER) {
-    await sendMessage(env, chatId, "Кнопка погоды пока не активна.");
+    await sendMessage(env, chatId, "Отправлен запрос на прогноз погоды.");
+    ctx.waitUntil(
+      dispatchWeatherWorkflow(env, chatId).catch((error) =>
+        sendMessage(env, chatId, `Не удалось запустить прогноз погоды: ${error.message}`),
+      ),
+    );
     return;
   }
 
