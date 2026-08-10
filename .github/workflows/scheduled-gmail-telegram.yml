@@ -1,0 +1,20 @@
+name: Gmail Report Every Two Hours
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gmail-report
+  cancel-in-progress: false
+
+jobs:
+  gmail-report:
+    uses: ./.github/workflows/gmail-report-core.yml
+    with:
+      report_chat_id: "1839693017"
+      notify_completion: false
+    secrets: inherit
