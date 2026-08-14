@@ -386,6 +386,17 @@ export default {
       return new Response("OK", { status: 200 });
     }
 
+    if (request.method === "GET" && url.pathname === "/health/github") {
+      try {
+        const repository = env.GCOD_REPOSITORY || "demideilan531-star/GCod-";
+        await githubApi(env, `/repos/${encodedRepository(repository)}`);
+        return new Response("OK", { status: 200 });
+      } catch (error) {
+        console.error("GitHub health check failed", error);
+        return new Response("GitHub unavailable", { status: 503 });
+      }
+    }
+
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405 });
     }
@@ -405,3 +416,4 @@ export default {
     }
   },
 };
+
