@@ -3,7 +3,7 @@
   "variant": "default",
   "repository": "demideilan531-star/GCod-",
   "branch": "main",
-  "generated_at": "2026-08-14T15:03:57.660Z",
+  "generated_at": "2026-08-14T15:09:19.396Z",
   "period_start": "2026-07-20T13:52:02Z",
   "period_end": "2026-07-20T13:52:02Z",
   "head_sha": "28dde2a425860f5884b34d38cd1c3b5d6267822f",
@@ -41,5 +41,6 @@
     "Проект собран в единую структуру: Revit, сервер, desktop и AI.",
     "Локальные AI-модули отделены от исполняемой Revit-логики.",
     "Хостинг и обновление включены в общий контур поставки."
-  ]
+  ],
+  "retry": 1
 }
