@@ -1,0 +1,45 @@
+{
+  "mode": "changes",
+  "variant": "default",
+  "repository": "demideilan531-star/GCod-",
+  "branch": "main",
+  "generated_at": "2026-08-14T15:03:57.660Z",
+  "period_start": "2026-07-20T13:52:02Z",
+  "period_end": "2026-07-20T13:52:02Z",
+  "head_sha": "28dde2a425860f5884b34d38cd1c3b5d6267822f",
+  "commits_count": 1,
+  "files_changed": 781,
+  "additions": 126712,
+  "deletions": 0,
+  "areas": [
+    {
+      "name": "Revit-плагин",
+      "count": 334
+    },
+    {
+      "name": "Локальный AI",
+      "count": 210
+    },
+    {
+      "name": "Desktop и обновления",
+      "count": 129
+    },
+    {
+      "name": "Сайт и хостинг",
+      "count": 53
+    },
+    {
+      "name": "Чат-сервер",
+      "count": 49
+    },
+    {
+      "name": "Инфраструктура",
+      "count": 6
+    }
+  ],
+  "highlights": [
+    "Проект собран в единую структуру: Revit, сервер, desktop и AI.",
+    "Локальные AI-модули отделены от исполняемой Revit-логики.",
+    "Хостинг и обновление включены в общий контур поставки."
+  ]
+}
