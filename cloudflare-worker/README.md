@@ -19,8 +19,10 @@ Do not store secret values in this directory or commit them to GitHub.
    `npm run deploy`.
 3. Add the three required encrypted secrets in Worker settings.
 4. Set the Telegram webhook to the Worker's public HTTPS URL.
-5. Verify `GET /health` returns `OK`, then send `/start` to the bot.
+5. Verify `GET /health` and `GET /health/github` return `OK`, then send
+   `/start` to the bot. The GitHub health endpoint exposes no repository data.
 
 The GitHub token needs Actions read/write access to
 `demideilan531-star/GCodRevit-TG-Bot` and Contents read access to
 `demideilan531-star/GCod-`.
+
