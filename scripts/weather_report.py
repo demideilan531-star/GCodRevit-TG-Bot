@@ -77,6 +77,24 @@ def extract_number(pattern, source, label, required=True):
     return match.group(1).replace("−", "-").replace(",", ".")
 
 
+def extended_forecast(page):
+    periods = (
+        ("НА ЭТОЙ НЕДЕЛЕ", "На неделе", "неделю"),
+        ("НА ВЫХОДНЫЕ", "На выходные", "выходные"),
+        ("СЕГОДНЯ", "Сегодня", "сегодня"),
+    )
+    for image_label, caption_label, period in periods:
+        match = re.search(
+            rf'<p class="[^"]*visuallyHidden[^"]*">Прогноз погоды на {period}:\s*(.*?)</p>',
+            page,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            return image_label, caption_label, normalize_text(match.group(1))
+
+    raise RuntimeError("Не удалось найти дополнительный прогноз на странице Яндекс Погоды")
+
+
 def parse_weather(page):
     fact_text = first_match(
         r'<p class="[^"]*visuallyHidden[^"]*">([^<]*?погода сейчас:[^<]+)</p>',
@@ -113,11 +131,7 @@ def parse_weather(page):
         page,
         "прогноз на завтра",
     )
-    week = first_match(
-        r'<p class="[^"]*visuallyHidden[^"]*">Прогноз погоды на неделю:\s*(.*?)</p>',
-        page,
-        "прогноз на неделю",
-    )
+    extended_image_label, extended_caption_label, extended = extended_forecast(page)
 
     hourly = []
     for item in re.findall(
@@ -165,7 +179,9 @@ def parse_weather(page):
         "water_temperature": water_temperature,
         "yesterday": yesterday,
         "tomorrow": tomorrow,
-        "week": week,
+        "extended_image_label": extended_image_label,
+        "extended_caption_label": extended_caption_label,
+        "extended": extended,
         "hourly": hourly,
     }
 
@@ -329,7 +345,7 @@ def build_image(weather):
     card_h = 154
     cards = [
         (42, "ЗАВТРА", weather["tomorrow"]),
-        (610, "НА ЭТОЙ НЕДЕЛЕ", weather["week"]),
+        (610, weather["extended_image_label"], weather["extended"]),
     ]
     for x, title, description in cards:
         draw.rounded_rectangle((x, card_y, x + card_w, card_y + card_h), radius=24, fill=BLUE_CARD)
@@ -368,7 +384,7 @@ def build_caption(weather):
         f"💧 Влажность: {weather['humidity']}%",
         "",
         f"Завтра: {weather['tomorrow']}",
-        f"На неделе: {weather['week']}",
+        f"{weather['extended_caption_label']}: {weather['extended']}",
         "",
         "Источник: Яндекс Погода",
         WEATHER_URL,
