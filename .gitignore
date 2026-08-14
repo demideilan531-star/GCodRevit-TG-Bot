@@ -2,3 +2,5 @@ hosting/spaceweb/telegram-webhook-config.php
 telegram-webhook-config.php
 telegram-webhook-state.json
 .env
+__pycache__/
+*.py[cod]

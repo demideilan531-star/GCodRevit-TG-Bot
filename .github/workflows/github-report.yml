@@ -1,0 +1,125 @@
+name: GCod GitHub Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      notify_chat_id:
+        description: "Private Telegram chat that receives completion status"
+        required: false
+        default: "1839693017"
+        type: string
+      report_json:
+        description: "Aggregated GCod repository report prepared by the Telegram Worker"
+        required: true
+        type: string
+  push:
+    paths:
+      - ".github/report-triggers/*.json"
+
+permissions:
+  contents: read
+
+jobs:
+  publish-github-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pillow
+
+      - name: Prepare report input
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPORT_JSON_INPUT: ${{ inputs.report_json }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            printf '%s' "$REPORT_JSON_INPUT" > /tmp/github_report.json
+          else
+            trigger_file=$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" \
+              | grep '^.github/report-triggers/.*\.json$' \
+              | head -n 1)
+            if [ -z "${trigger_file:-}" ] || [ ! -f "$trigger_file" ]; then
+              echo "::error::No GitHub report trigger was found in this commit"
+              exit 1
+            fi
+            cp "$trigger_file" /tmp/github_report.json
+          fi
+          python -m json.tool /tmp/github_report.json > /dev/null
+
+      - name: Build image and caption
+        env:
+          GITHUB_REPORT_JSON_PATH: /tmp/github_report.json
+          REPORT_TIMEZONE: Europe/Moscow
+        run: python scripts/github_report.py
+
+      - name: Validate Telegram secrets
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          missing=0
+          for name in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Required secret ${name} is not configured"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Publish one post with image to the channel
+        id: publish_report
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          response=$(curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 120 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "photo=@/tmp/github_report.png" \
+            --form-string "caption=$(cat /tmp/github_caption.txt)")
+
+          if [ "$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')" != "true" ]; then
+            echo "::error::Telegram did not accept the GitHub report"
+            exit 1
+          fi
+
+          message_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin)["result"]["message_id"])')
+          echo "Telegram accepted the GitHub report. message_id=${message_id}"
+
+      - name: Notify requester
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.notify_chat_id != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          NOTIFY_CHAT_ID: ${{ inputs.notify_chat_id }}
+          REPORT_SENT: ${{ steps.publish_report.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          if [ "$REPORT_SENT" = "true" ]; then
+            message="✅ Отчёт по GitHub опубликован в канале."
+          else
+            message="❌ Не удалось опубликовать отчёт по GitHub. Проверь GitHub Actions."
+          fi
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${NOTIFY_CHAT_ID}" \
+            --data-urlencode "text=${message}" \
+            > /tmp/github_notify_response.json

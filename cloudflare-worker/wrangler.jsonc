@@ -9,6 +9,10 @@
     "TELEGRAM_ADMIN_IDS": "1839693017",
     "GITHUB_REPOSITORY": "demideilan531-star/GCodRevit-TG-Bot",
     "GITHUB_REF_NAME": "main",
+    "GITHUB_WORKFLOW_ID": "github-report.yml",
+    "GCOD_REPOSITORY": "demideilan531-star/GCod-",
+    "GCOD_REF_NAME": "main",
+    "GITHUB_LOOKBACK_DAYS": "30",
     "GMAIL_WORKFLOW_ID": "hourly-gmail-telegram.yml",
     "WEATHER_WORKFLOW_ID": "weather-report.yml"
   }

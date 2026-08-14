@@ -1,8 +1,8 @@
 # GCodRevit Telegram Worker
 
 Cloudflare Worker handles Telegram buttons immediately and starts GitHub
-Actions workflows for Gmail reports and GCodRevit video posts in the
-background.
+Actions workflows for Gmail reports, GCod repository reports, and GCodRevit
+video posts in the background.
 
 ## Required secrets
 
@@ -21,5 +21,6 @@ Do not store secret values in this directory or commit them to GitHub.
 4. Set the Telegram webhook to the Worker's public HTTPS URL.
 5. Verify `GET /health` returns `OK`, then send `/start` to the bot.
 
-The GitHub token only needs Actions read/write access to
-`demideilan531-star/GCodRevit-TG-Bot`.
+The GitHub token needs Actions read/write access to
+`demideilan531-star/GCodRevit-TG-Bot` and Contents read access to
+`demideilan531-star/GCod-`.

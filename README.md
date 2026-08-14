@@ -10,6 +10,7 @@
 2. Пост с фото и текстом: `sendPhoto`.
 3. Пост с видео и текстом: `sendVideo` с `supports_streaming=true`.
 4. Автоматический пост из сырого видео через GitHub Models без отдельного API-ключа ИИ.
+5. Отчёт об изменениях `GCod-` с автоматически собранной картинкой и живой подписью.
 
 ## Секреты GitHub
 
@@ -24,6 +25,33 @@
 
 Для GitHub Models отдельный секрет не нужен. Workflow получает временный
 `GITHUB_TOKEN` автоматически и запрашивает только разрешение `models: read`.
+
+## Кнопка GitHub
+
+Кнопка `🧩 GitHub` анализирует приватный репозиторий
+`demideilan531-star/GCod-` без платного API ИИ. Cloudflare Worker читает
+коммиты и агрегирует статистику по файлам, после чего запускает
+`.github/workflows/github-report.yml`. Workflow создаёт PNG и публикует один
+пост с подписью в канал из секрета `TELEGRAM_CHAT_ID`.
+
+Цепочка:
+
+1. Бот сразу подтверждает нажатие в личном чате.
+2. Worker читает последние коммиты `GCod-` через GitHub REST API.
+3. В workflow передаются только данные будущего публичного поста: счётчики,
+   направления работ и короткие выводы. Исходный код не передаётся.
+4. Python и Pillow собирают картинку и подпись без внешнего AI API.
+5. Telegram получает один `sendPhoto`, а пользователь — сообщение о завершении.
+
+Fine-grained token в Cloudflare Secret `GITHUB_TOKEN` должен иметь доступ к
+двум репозиториям:
+
+- `GCodRevit-TG-Bot`: `Actions: Read and write`, `Metadata: Read`;
+- `GCod-`: `Contents: Read`, `Metadata: Read`.
+
+Повторное нажатие блокируется на 60 секунд. Настройки находятся в
+`cloudflare-worker/wrangler.jsonc`: `GCOD_REPOSITORY`, `GCOD_REF_NAME`,
+`GITHUB_LOOKBACK_DAYS` и `GITHUB_WORKFLOW_ID`.
 
 ## Автоматический пост из видео
 
