@@ -170,11 +170,20 @@ def headline(report):
     return "GCodRevit обновился. Ручной труд снова немного проиграл."
 
 
+def fitted_font(draw, text, max_width, start_size=54, min_size=30, bold=True):
+    for size in range(start_size, min_size - 1, -1):
+        selected = font(size, bold)
+        if draw.textbbox((0, 0), str(text), font=selected)[2] <= max_width:
+            return selected
+    return font(min_size, bold)
+
+
 def draw_metric(draw, x, label, value, accent):
     draw.rounded_rectangle((x, 260, x + 344, 406), radius=18, fill=PANEL)
     draw.rectangle((x, 260, x + 8, 406), fill=accent)
     draw.text((x + 30, 284), label, font=font(20, True), fill=MUTED)
-    draw.text((x + 30, 323), str(value), font=font(54, True), fill=INK)
+    value_font = fitted_font(draw, value, 284)
+    draw.text((x + 30, 323), str(value), font=value_font, fill=INK)
 
 
 def build_image(report):
@@ -277,3 +286,4 @@ if __name__ == "__main__":
     except Exception as error:
         print(f"GitHub report failed: {error}", file=sys.stderr)
         raise
+
