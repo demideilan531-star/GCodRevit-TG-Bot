@@ -3,6 +3,62 @@ const BUTTON_GITHUB = "🧩 GitHub";
 const BUTTON_VIDEO = "🎬 Видео GCodRevit";
 const BUTTON_WEATHER = "🌤 Погода";
 
+const GITHUB_FEATURES = [
+  {
+    id: "ai-chat",
+    priority: 100,
+    paths: [/^GCod\/GCod\/AiChat\//i],
+    title: "Чат ИИ прямо в Revit",
+    what: "Вкладка GCod получила чат с локальной моделью через GCod Desktop.",
+    how: "Открой Revit → GCod → ИИ → «Чат ИИ» и задай вопрос по текущей работе.",
+    why: "Можно получить подсказку по GCod и Revit, не переключаясь между приложениями.",
+  },
+  {
+    id: "bim-tasks",
+    priority: 90,
+    paths: [/^GCod\/GCod\/BimTasks\//i, /^GCod Chat Server\//i],
+    title: "BIM-задачи и переписка",
+    what: "В GCod доступны создание задачи, чат по ней и доска текущих работ.",
+    how: "В Revit открой GCod → BIM отдел и выбери «Задание», «Чат» или «Текущие».",
+    why: "Задачи, статусы и уточнения остаются в одном месте и не теряются в личных сообщениях.",
+  },
+  {
+    id: "family-tools",
+    priority: 80,
+    paths: [
+      /^GCod\/GCod\/FamilyAssembly\//i,
+      /^GCod\/GCod\/Functions\/Settings\//i,
+      /LookupTableFamily/i,
+    ],
+    title: "Подготовка семейств без рутины",
+    what: "Добавлены команды для HT/ЦК-параметров, таблиц выбора, сборки и чистки семейства.",
+    how: "Открой RFA, затем в GCod выбери нужную команду параметров, таблицы выбора или сборки.",
+    why: "Типовые семейства готовятся одинаково, быстрее и с меньшим риском пропустить параметр.",
+  },
+  {
+    id: "coordination",
+    priority: 70,
+    paths: [
+      /^GCod\/GCod\/GCOD_Coordination\//i,
+      /^GCod\/GCod\/NwcExport\//i,
+      /^GCod\/GCod\/ProjectCleanup\//i,
+    ],
+    title: "Координация и выдача модели",
+    what: "Появились проверка координации, перенос ADSK → SP, выгрузка и чистка проекта.",
+    how: "Открой RVT и используй панели «Координация» и «Выгрузка» на вкладке GCod.",
+    why: "Перед выдачей модель можно проверить, привести параметры в порядок и выгрузить по одному сценарию.",
+  },
+  {
+    id: "desktop",
+    priority: 60,
+    paths: [/^GCod exe\//i],
+    title: "GCod Desktop и обновления",
+    what: "Desktop объединяет лицензию, обновления, локальные сервисы и запуск AI-пакетов.",
+    how: "Запусти GCod Desktop перед Revit и проверь статус подключения и доступную версию.",
+    why: "Плагин обновляется и подключается к локальным сервисам без ручной замены файлов.",
+  },
+];
+
 function keyboard() {
   return {
     keyboard: [
@@ -93,17 +149,6 @@ async function githubApi(env, path) {
   return response.json();
 }
 
-function githubArea(path) {
-  const value = String(path || "").replaceAll("\\", "/");
-  if (value.startsWith("AI/")) return "Локальный AI";
-  if (value.startsWith("GCod Chat Server/")) return "Чат-сервер";
-  if (value.startsWith("GCod exe/")) return "Desktop и обновления";
-  if (value.startsWith("GCodSharedHosting/")) return "Сайт и хостинг";
-  if (value.startsWith("GCod/")) return "Revit-плагин";
-  if (value.startsWith("docs/")) return "Документация";
-  return "Инфраструктура";
-}
-
 function commitTitle(commit) {
   const message = String(commit?.commit?.message || "Обновление проекта")
     .split("\n")[0]
@@ -114,8 +159,31 @@ function commitTitle(commit) {
   return message.slice(0, 90);
 }
 
-async function collectCommitDetails(env, repository, sha, areas) {
+function featureStatus(fileStatus, commitMessage, snapshot) {
+  if (snapshot) return "available";
+  if (fileStatus === "removed") return "removed";
+  if (/\b(fix|fixed|repair|исправ|почин)/i.test(commitMessage)) return "fixed";
+  if (fileStatus === "added") return "new";
+  return "updated";
+}
+
+function recordGithubFeatures(file, commitMessage, snapshot, features) {
+  const path = String(file?.filename || "").replaceAll("\\", "/");
+  for (const definition of GITHUB_FEATURES) {
+    if (!definition.paths.some((pattern) => pattern.test(path))) continue;
+    const status = featureStatus(file.status, commitMessage, snapshot);
+    const current = features.get(definition.id);
+    const rank = { removed: 4, new: 3, fixed: 2, updated: 1, available: 0 };
+    if (!current || rank[status] > rank[current.status]) {
+      features.set(definition.id, { ...definition, status });
+    }
+  }
+}
+
+async function collectCommitDetails(env, repository, commit, snapshot, features) {
   const encoded = encodedRepository(repository);
+  const sha = commit.sha;
+  const commitMessage = String(commit?.commit?.message || "");
   let additions = 0;
   let deletions = 0;
   let filesChanged = 0;
@@ -132,8 +200,7 @@ async function collectCommitDetails(env, repository, sha, areas) {
     }
     const files = Array.isArray(detail.files) ? detail.files : [];
     for (const file of files) {
-      const area = githubArea(file.filename);
-      areas.set(area, (areas.get(area) || 0) + 1);
+      recordGithubFeatures(file, commitMessage, snapshot, features);
     }
     filesChanged += files.length;
     if (files.length < 100) {
@@ -167,42 +234,45 @@ async function collectGithubReport(env) {
     return Number.isFinite(date) && date >= cutoff;
   });
   const selected = (recent.length ? recent : commits.slice(0, 1)).slice(0, 3);
-  const areas = new Map();
-  let additions = 0;
-  let deletions = 0;
+  const snapshot = !Array.isArray(commits[0]?.parents) || commits[0].parents.length === 0;
+  const features = new Map();
   let filesChanged = 0;
   let truncated = false;
 
   for (const commit of selected) {
-    const details = await collectCommitDetails(env, repository, commit.sha, areas);
-    additions += details.additions;
-    deletions += details.deletions;
+    const details = await collectCommitDetails(env, repository, commit, snapshot, features);
     filesChanged += details.filesChanged;
     truncated ||= details.truncated;
   }
 
-  let highlights = selected.map(commitTitle).filter(Boolean).slice(0, 4);
-  if (selected.some((commit) => String(commit?.commit?.message || "").toLowerCase().includes("initial project import"))) {
-    highlights = [
-      "Проект собран в единую структуру: Revit, сервер, desktop и AI.",
-      "Локальные AI-модули отделены от исполняемой Revit-логики.",
-      "Хостинг и обновление включены в общий контур поставки.",
+  let changes = [...features.values()]
+    .sort((left, right) => right.priority - left.priority)
+    .slice(0, 3)
+    .map(({ priority, paths, ...feature }) => feature);
+  if (!changes.length) {
+    changes = [
+      {
+        id: "technical-update",
+        status: /\b(fix|fixed|repair|исправ|почин)/i.test(
+          String(selected[0]?.commit?.message || ""),
+        )
+          ? "fixed"
+          : "updated",
+        title: "Техническое обновление",
+        what: commitTitle(selected[0]),
+        how: "Ничего переучивать не нужно: обнови GCod и работай как обычно.",
+        why: "Изменение поддерживает стабильность проекта, но не добавляет новую кнопку.",
+      },
     ];
-  } else if (!recent.length) {
-    highlights.unshift("После последнего коммита новых изменений не найдено.");
   }
 
-  const areaList = [...areas.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((left, right) => right.count - left.count)
-    .slice(0, 6);
   const dates = selected
     .map((commit) => commit?.commit?.committer?.date || commit?.commit?.author?.date)
     .filter(Boolean)
     .sort();
 
   return {
-    mode: recent.length ? "changes" : "snapshot",
+    mode: snapshot || !recent.length ? "snapshot" : "changes",
     variant: "default",
     repository,
     branch: repo.default_branch || branch,
@@ -211,11 +281,20 @@ async function collectGithubReport(env) {
     period_end: dates[dates.length - 1] || "",
     head_sha: commits[0].sha,
     commits_count: recent.length || 1,
-    files_changed: truncated ? `${filesChanged}+` : filesChanged,
-    additions,
-    deletions,
-    areas: areaList,
-    highlights,
+    report_title: snapshot
+      ? "GCodRevit: что уже доступно"
+      : "GCodRevit: что изменилось",
+    summary: snapshot
+      ? "Это первый снимок проекта: показываем не объём кода, а полезные возможности для работы."
+      : `Нашли ${changes.length} заметных для пользователя изменений в GCodRevit.`,
+    baseline_note: snapshot
+      ? "Предыдущей версии в GitHub пока нет, поэтому честного сравнения «было → стало» ещё не получится."
+      : "",
+    changes,
+    technical: {
+      commits: recent.length || 1,
+      files: truncated ? `${filesChanged}+` : filesChanged,
+    },
     truncated,
   };
 }
