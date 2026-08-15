@@ -77,11 +77,53 @@ def extract_number(pattern, source, label, required=True):
     return match.group(1).replace("−", "-").replace(",", ".")
 
 
+def tomorrow_forecast(page):
+    legacy = re.search(
+        r'<p class="[^"]*visuallyHidden[^"]*">Прогноз погоды на завтра:\s*(.*?)</p>',
+        page,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if legacy:
+        return normalize_text(legacy.group(1))
+
+    current = re.search(
+        r'<p class="[^"]*visuallyHidden[^"]*">Завтра(?:,\s*[^:]+)?:\s*(.*?)</p>',
+        page,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not current:
+        raise RuntimeError("Не удалось найти прогноз на завтра на странице Яндекс Погоды")
+
+    details = normalize_text(current.group(1))
+    temperatures = [
+        int(value.replace("−", "-"))
+        for value in re.findall(
+            r"(?:утром(?:\s+температура воздуха)?|днём|вечером|ночью)\s*([+\-−]?\d+)°",
+            details,
+            re.IGNORECASE,
+        )
+    ]
+    daytime = re.search(
+        r"днём\s*[+\-−]?\d+°,\s*ощущается как\s*[+\-−]?\d+°,\s*([^,]+),"
+        r"\s*скорость ветра\s*([\d,.]+)\s*м/с",
+        details,
+        re.IGNORECASE,
+    )
+    if not temperatures or not daytime:
+        return details
+
+    condition = normalize_text(daytime.group(1)).capitalize()
+    wind_speed = daytime.group(2)
+    low = min(temperatures)
+    high = max(temperatures)
+    return f"{condition} · {low:+d}…{high:+d}° · ветер {wind_speed} м/с"
+
+
 def extended_forecast(page):
     periods = (
+        ("НА СЛЕДУЮЩЕЙ НЕДЕЛЕ", "На следующей неделе", "следующую неделю"),
         ("НА ЭТОЙ НЕДЕЛЕ", "На неделе", "неделю"),
         ("НА ВЫХОДНЫЕ", "На выходные", "выходные"),
-        ("СЕГОДНЯ", "Сегодня", "сегодня"),
     )
     for image_label, caption_label, period in periods:
         match = re.search(
@@ -91,6 +133,30 @@ def extended_forecast(page):
         )
         if match:
             return image_label, caption_label, normalize_text(match.group(1))
+
+    warning_periods = (
+        ("НА СЛЕДУЮЩЕЙ НЕДЕЛЕ", "На следующей неделе"),
+        ("НА ЭТОЙ НЕДЕЛЕ", "На этой неделе"),
+        ("НА ВЫХОДНЫЕ", "На выходные"),
+        ("СЕГОДНЯ", "Сегодня"),
+    )
+    for image_label, title in warning_periods:
+        match = re.search(
+            rf'<span>\s*{re.escape(title)}\s*</span>.*?'
+            r'<p class="[^"]*AppWarningsItemWarning_text__[^"]*">(.*?)</p>',
+            page,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            return image_label, title, normalize_text(match.group(1))
+
+    today = re.search(
+        r'<p class="[^"]*visuallyHidden[^"]*">Прогноз погоды на сегодня:\s*(.*?)</p>',
+        page,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if today:
+        return "СЕГОДНЯ", "Сегодня", normalize_text(today.group(1))
 
     raise RuntimeError("Не удалось найти дополнительный прогноз на странице Яндекс Погоды")
 
@@ -126,11 +192,7 @@ def parse_weather(page):
     )
     summary = normalize_text(summary_match.group(1)).rstrip(",") if summary_match else condition
 
-    tomorrow = first_match(
-        r'<p class="[^"]*visuallyHidden[^"]*">Прогноз погоды на завтра:\s*(.*?)</p>',
-        page,
-        "прогноз на завтра",
-    )
+    tomorrow = tomorrow_forecast(page)
     extended_image_label, extended_caption_label, extended = extended_forecast(page)
 
     hourly = []
@@ -410,3 +472,4 @@ if __name__ == "__main__":
     except Exception as error:
         print(f"Weather report failed: {error}", file=sys.stderr)
         raise
+
