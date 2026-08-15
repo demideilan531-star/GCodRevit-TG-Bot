@@ -68,6 +68,15 @@ class GithubReportTests(unittest.TestCase):
             image_path.unlink(missing_ok=True)
             caption_path.unlink(missing_ok=True)
 
+    def test_large_metric_value_fits_card(self):
+        image = Image.new("RGB", (400, 200))
+        draw = github_report.ImageDraw.Draw(image)
+        value = "+126 712 / -0"
+        selected = github_report.fitted_font(draw, value, 284)
+
+        self.assertLessEqual(draw.textbbox((0, 0), value, font=selected)[2], 284)
+
 
 if __name__ == "__main__":
     unittest.main()
+
