@@ -1,8 +1,9 @@
-name: Gmail Report Every Two Hours
+name: Gmail Report Schedule (Disabled)
 
 on:
-  schedule:
-    - cron: "0 */2 * * *"
+  # Automatic Gmail reports are disabled. The Telegram button uses
+  # hourly-gmail-telegram.yml and remains available independently.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,3 +19,4 @@ jobs:
       report_chat_id: "1839693017"
       notify_completion: false
     secrets: inherit
+
