@@ -698,7 +698,20 @@ export default {
     if (request.method === "GET" && url.pathname === "/health/github") {
       try {
         const repository = env.GCOD_REPOSITORY || "demideilan531-star/GCod-";
-        await githubApi(env, `/repos/${encodedRepository(repository)}`);
+        const encoded = encodedRepository(repository);
+        const [, releases] = await Promise.all([
+          githubApi(env, `/repos/${encoded}`),
+          githubApi(env, `/repos/${encoded}/releases?per_page=30`),
+        ]);
+        const releaseGroups = groupGithubReleases(releases);
+        const latest = releaseGroups[0];
+        if (!latest) throw new Error("GitHub не вернул ни одного релиза GCod.");
+        console.info("GitHub release health", {
+          latest: latest.version,
+          draftVisible: latest.releases.some((release) => release?.draft === true),
+          duplicates: latest.releases.length,
+          visible: releaseGroups.map((group) => group.version),
+        });
         return new Response("OK", { status: 200 });
       } catch (error) {
         console.error("GitHub health check failed", error);
