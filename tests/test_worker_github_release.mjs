@@ -57,6 +57,10 @@ const releases = [
 
 assert.equal(worker.compareVersions("v1.0.104", "v1.0.103"), 1);
 
+const merged = worker.mergeGithubReleases([releases[0]], releases);
+assert.equal(merged.length, 2);
+assert.equal(merged[0].tag_name, "v1.0.104");
+
 const groups = worker.groupGithubReleases(releases);
 assert.equal(groups[0].version, "v1.0.104");
 assert.equal(groups[0].releases.length, 2);
@@ -68,7 +72,6 @@ const report = worker.buildGithubReleaseReport(
   "main",
   Date.parse("2026-08-01T00:00:00Z"),
 );
-
 assert.equal(report.release_version, "v1.0.104");
 assert.equal(report.report_title, "GCod 1.0.104: что изменилось");
 assert.equal(report.baseline_note, "Сравнение: 1.0.103 → 1.0.104.");
@@ -79,5 +82,32 @@ assert.deepEqual(
   ["navisworks-offline-license", "protected-builds", "nwc-errors"],
 );
 
-console.log("GitHub release report tests passed.");
+const manifestReport = worker.buildGithubManifestReport(
+  {
+    schemaVersion: 1,
+    version: "1.0.104",
+    summary: "Версия для пользователей, а не отчёт о количестве файлов.",
+    source: { commit: "abc123" },
+    changes: [
+      {
+        status: "new",
+        title: "Офлайн-лицензия Navisworks",
+        what: "Лицензия работает без постоянного соединения.",
+        how: "Обнови GCod и активируй Navisworks на компьютере.",
+        why: "Работа не останавливается при временной недоступности сервера.",
+      },
+    ],
+    artifacts: [{ name: "GCodSetup-1.0.104.exe" }],
+  },
+  groups[0],
+  groups[1],
+  "demideilan531-star/GCod-",
+  "main",
+);
 
+assert.equal(manifestReport.variant, "release-manifest");
+assert.equal(manifestReport.head_sha, "abc123");
+assert.equal(manifestReport.changes[0].status, "new");
+assert.equal(manifestReport.technical.manifest_artifacts, 1);
+
+console.log("GitHub release report tests passed.");

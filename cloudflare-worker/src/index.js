@@ -177,7 +177,7 @@ function encodedRepository(repository) {
   return repository.split("/").map(encodeURIComponent).join("/");
 }
 
-async function githubApi(env, path) {
+async function githubApi(env, path, { allowNotFound = false } = {}) {
   const response = await fetch(`https://api.github.com${path}`, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -187,6 +187,7 @@ async function githubApi(env, path) {
     },
   });
   if (!response.ok) {
+    if (response.status === 404 && allowNotFound) return null;
     if (response.status === 404) {
       throw new Error(
         "GitHub не дал доступ к GCod-. Добавь этот репозиторий в доступ fine-grained token.",
@@ -195,6 +196,35 @@ async function githubApi(env, path) {
     throw new Error(`GitHub API вернул HTTP ${response.status}`);
   }
   return response.json();
+}
+
+function mergeGithubReleases(...sources) {
+  const releases = new Map();
+  for (const source of sources) {
+    for (const release of Array.isArray(source) ? source : []) {
+      if (!release || typeof release !== "object") continue;
+      const tag = String(release.tag_name || release.name || "").trim().toLowerCase();
+      if (!tag && release.id == null) continue;
+      const key = release.id != null ? `id:${release.id}` : `tag:${tag}:${release.draft === true}`;
+      const current = releases.get(key);
+      if (!current || releaseTimestamp(release) >= releaseTimestamp(current)) {
+        releases.set(key, release);
+      }
+    }
+  }
+  return [...releases.values()].sort(
+    (left, right) => releaseTimestamp(right) - releaseTimestamp(left),
+  );
+}
+
+async function githubReleaseInventory(env, encodedRepositoryName) {
+  const [latest, releases] = await Promise.all([
+    githubApi(env, `/repos/${encodedRepositoryName}/releases/latest`, {
+      allowNotFound: true,
+    }),
+    githubApi(env, `/repos/${encodedRepositoryName}/releases?per_page=30`),
+  ]);
+  return mergeGithubReleases(latest ? [latest] : [], releases);
 }
 
 function commitTitle(commit) {
@@ -433,6 +463,94 @@ function buildGithubReleaseReport(releases, repository, branch, cutoff) {
   };
 }
 
+function buildGithubManifestReport(manifest, latest, previous, repository, branch) {
+  const manifestVersion = cleanReleaseLine(manifest?.version, 40).replace(/^v/i, "");
+  const releaseVersion = latest.version.replace(/^v/i, "");
+  if (Number(manifest?.schemaVersion) !== 1 || manifestVersion !== releaseVersion) {
+    throw new Error(`Манифест релиза ${latest.version} имеет неверную схему или версию.`);
+  }
+
+  const allowedStatuses = new Set(["new", "updated", "fixed", "removed"]);
+  const changes = (Array.isArray(manifest?.changes) ? manifest.changes : [])
+    .map((change, index) => ({
+      id: cleanReleaseLine(change?.id || `manifest-${index + 1}`, 50),
+      status: allowedStatuses.has(change?.status) ? change.status : "updated",
+      title: cleanReleaseLine(change?.title, 72),
+      what: cleanReleaseLine(change?.what),
+      how: cleanReleaseLine(change?.how),
+      why: cleanReleaseLine(change?.why),
+    }))
+    .filter((change) => change.title && change.what && change.how && change.why)
+    .slice(0, 3);
+  if (!changes.length) {
+    throw new Error(`Манифест релиза ${latest.version} не содержит изменений для отчёта.`);
+  }
+
+  return {
+    mode: "changes",
+    variant: "release-manifest",
+    repository,
+    branch,
+    generated_at: new Date().toISOString(),
+    period_start: previous?.representative?.published_at || "",
+    period_end: latest.representative?.published_at || new Date(latest.timestamp).toISOString(),
+    head_sha: cleanReleaseLine(manifest?.source?.commit || latest.version, 64),
+    commits_count: 0,
+    release_version: latest.version,
+    release_url: latest.representative?.html_url || "",
+    report_title: `GCod ${releaseVersion}: что изменилось`,
+    summary: cleanReleaseLine(
+      manifest?.summary || `Версия ${releaseVersion} опубликована и готова к установке.`,
+    ),
+    baseline_note: previous
+      ? `Сравнение: ${previous.version.replace(/^v/i, "")} → ${releaseVersion}.`
+      : "Это первый опубликованный релиз в едином формате.",
+    changes,
+    technical: {
+      assets: latest.assets.length,
+      manifest_artifacts: Array.isArray(manifest?.artifacts) ? manifest.artifacts.length : 0,
+    },
+    truncated: false,
+  };
+}
+
+async function githubReleaseAssetJson(env, asset) {
+  const response = await fetch(asset.url, {
+    headers: {
+      Accept: "application/octet-stream",
+      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      "User-Agent": "GCodRevit-Telegram-Worker",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub не отдал release-manifest.json: HTTP ${response.status}`);
+  }
+  try {
+    return JSON.parse(await response.text());
+  } catch {
+    throw new Error("release-manifest.json содержит некорректный JSON.");
+  }
+}
+
+async function collectGithubReleaseReport(env, releases, repository, branch) {
+  const published = (Array.isArray(releases) ? releases : []).filter(
+    (release) => release?.draft !== true && release?.published_at,
+  );
+  const groups = groupGithubReleases(published);
+  const latest = groups[0];
+  if (!latest) return null;
+  const previous = groups.find(
+    (group) => compareVersions(group.version, latest.version) < 0,
+  );
+  const manifestAsset = latest.assets.find((asset) => asset?.name === "release-manifest.json");
+  if (manifestAsset) {
+    const manifest = await githubReleaseAssetJson(env, manifestAsset);
+    return buildGithubManifestReport(manifest, latest, previous, repository, branch);
+  }
+  return buildGithubReleaseReport(published, repository, branch, 0);
+}
+
 async function collectGithubReport(env) {
   const repository = env.GCOD_REPOSITORY || "demideilan531-star/GCod-";
   const branch = env.GCOD_REF_NAME || "main";
@@ -443,17 +561,17 @@ async function collectGithubReport(env) {
   const [repo, commits, releases] = await Promise.all([
     githubApi(env, `/repos/${encoded}`),
     githubApi(env, `/repos/${encoded}/commits?sha=${encodeURIComponent(branch)}&per_page=10`),
-    githubApi(env, `/repos/${encoded}/releases?per_page=30`),
+    githubReleaseInventory(env, encoded),
   ]);
   if (!Array.isArray(commits) || commits.length === 0) {
     throw new Error("В GCod- не найдено ни одного коммита.");
   }
 
-  const releaseReport = buildGithubReleaseReport(
+  const releaseReport = await collectGithubReleaseReport(
+    env,
     releases,
     repository,
     repo.default_branch || branch,
-    cutoff,
   );
   if (releaseReport) return releaseReport;
 
@@ -527,7 +645,14 @@ async function collectGithubReport(env) {
   };
 }
 
-export { buildGithubReleaseReport, compareVersions, groupGithubReleases, versionParts };
+export {
+  buildGithubManifestReport,
+  buildGithubReleaseReport,
+  compareVersions,
+  groupGithubReleases,
+  mergeGithubReleases,
+  versionParts,
+};
 
 async function dispatchGithubWorkflow(env, chatId) {
   const report = await collectGithubReport(env);
@@ -699,19 +824,30 @@ export default {
       try {
         const repository = env.GCOD_REPOSITORY || "demideilan531-star/GCod-";
         const encoded = encodedRepository(repository);
-        const [, releases] = await Promise.all([
+        const [repo, releases] = await Promise.all([
           githubApi(env, `/repos/${encoded}`),
-          githubApi(env, `/repos/${encoded}/releases?per_page=30`),
+          githubReleaseInventory(env, encoded),
         ]);
-        const releaseGroups = groupGithubReleases(releases);
+        const releaseGroups = groupGithubReleases(
+          releases.filter((release) => release?.draft !== true),
+        );
         const latest = releaseGroups[0];
         if (!latest) throw new Error("GitHub не вернул ни одного релиза GCod.");
-        console.info("GitHub release health", {
+        const report = await collectGithubReleaseReport(
+          env,
+          releases,
+          repository,
+          repo.default_branch || env.GCOD_REF_NAME || "main",
+        );
+        if (!report) throw new Error("Последний релиз GCod не удалось преобразовать в отчёт.");
+        const health = {
+          status: "ok",
           latest: latest.version,
-          draftVisible: latest.releases.some((release) => release?.draft === true),
-          duplicates: latest.releases.length,
+          source: report.variant,
+          draftsVisible: releases.filter((release) => release?.draft === true).length,
           visible: releaseGroups.map((group) => group.version),
-        });
+        };
+        console.info("GitHub release health", health);
         return new Response("OK", { status: 200 });
       } catch (error) {
         console.error("GitHub health check failed", error);
