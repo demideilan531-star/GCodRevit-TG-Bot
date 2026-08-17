@@ -59,6 +59,54 @@ const GITHUB_FEATURES = [
   },
 ];
 
+const RELEASE_FEATURES = [
+  {
+    id: "navisworks-offline-license",
+    priority: 100,
+    pattern: /офлайн[- ]лиценз.*navisworks|navisworks.*офлайн[- ]лиценз/i,
+    status: "new",
+    title: "Офлайн-лицензия Navisworks",
+    how: "Установи пакет GCod Navisworks 2023 и активируй его на рабочем компьютере.",
+    why: "Плагин сможет подтверждать лицензию без постоянного подключения к серверу.",
+  },
+  {
+    id: "protected-builds",
+    priority: 90,
+    pattern: /обфускац|защит.*(?:dll|сбор)|целостност.*пакет|sha-?256/i,
+    status: "updated",
+    title: "Защищённые и проверяемые сборки",
+    how: "Устанавливай компоненты из приложенных пакетов: проверка целостности выполняется при выпуске.",
+    why: "Повреждённые или подменённые файлы обнаруживаются до того, как попадут в рабочую среду.",
+  },
+  {
+    id: "nwc-errors",
+    priority: 85,
+    pattern: /ошибк.*(?:nwc|экспорт)|экспорт[её]р.*nwc/i,
+    status: "fixed",
+    title: "Понятные ошибки экспорта NWC",
+    how: "Запусти экспорт NWC как обычно: результат теперь вернёт структурированную причину сбоя.",
+    why: "Неудачную выгрузку можно диагностировать без поиска причины по разрозненным логам.",
+  },
+  {
+    id: "rnc-pipeline",
+    priority: 80,
+    pattern: /конвейер.*rnc|очистк.*rvt.*экспорт.*nwc|повторн.*открыт.*nwc/i,
+    status: "fixed",
+    title: "Надёжный конвейер RVT → NWC",
+    how: "Запусти RNC-сценарий: GCod сам очистит, сохранит, переоткроет модель и выполнит экспорт.",
+    why: "NWC создаётся из уже сохранённого состояния модели, поэтому результат предсказуемее.",
+  },
+  {
+    id: "component-update",
+    priority: 60,
+    pattern: /обновлен.*(?:desktop|revit|navisworks|chat server)|состав релиза/i,
+    status: "updated",
+    title: "Компоненты GCod одной версии",
+    how: "Обнови Desktop, нужный плагин Revit или Navisworks и Chat Server из одного релиза.",
+    why: "Компоненты одной версии проверены вместе и меньше рискуют разойтись по совместимости.",
+  },
+];
+
 function keyboard() {
   return {
     keyboard: [
@@ -214,6 +262,177 @@ async function collectCommitDetails(env, repository, commit, snapshot, features)
   return { additions, deletions, filesChanged, truncated };
 }
 
+function versionParts(value) {
+  const match = String(value || "").match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?/);
+  return match ? match.slice(1).filter((part) => part !== undefined).map(Number) : [];
+}
+
+function compareVersions(left, right) {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function releaseTimestamp(release) {
+  const timestamps = [release?.published_at, release?.created_at, release?.updated_at];
+  for (const asset of release?.assets || []) timestamps.push(asset?.updated_at);
+  const parsed = timestamps.map(Date.parse).filter(Number.isFinite);
+  return parsed.length ? Math.max(...parsed) : 0;
+}
+
+function cleanReleaseLine(value, maxLength = 190) {
+  const text = String(value || "")
+    .replace(/[`*_]/g, "")
+    .replace(/\[([^\]]+)]\([^\s)]+\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function releaseBullets(body) {
+  return String(body || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().match(/^[-*]\s+(.+)$/)?.[1])
+    .filter(Boolean)
+    .map((line) => cleanReleaseLine(line));
+}
+
+function groupGithubReleases(releases) {
+  const groups = new Map();
+  for (const release of Array.isArray(releases) ? releases : []) {
+    const version = cleanReleaseLine(release?.tag_name || release?.name, 40);
+    if (!versionParts(version).length) continue;
+    const key = version.toLowerCase().replace(/^v/, "");
+    if (!groups.has(key)) {
+      groups.set(key, {
+        version,
+        releases: [],
+        bullets: new Set(),
+        assets: new Map(),
+        timestamp: 0,
+      });
+    }
+    const group = groups.get(key);
+    group.releases.push(release);
+    group.timestamp = Math.max(group.timestamp, releaseTimestamp(release));
+    for (const bullet of releaseBullets(release?.body)) group.bullets.add(bullet);
+    for (const asset of release?.assets || []) {
+      if (asset?.name) group.assets.set(asset.name, asset);
+    }
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      bullets: [...group.bullets],
+      assets: [...group.assets.values()],
+      representative: [...group.releases].sort(
+        (left, right) => releaseTimestamp(right) - releaseTimestamp(left),
+      )[0],
+    }))
+    .sort(
+      (left, right) =>
+        compareVersions(right.version, left.version) || right.timestamp - left.timestamp,
+    );
+}
+
+function genericReleaseStatus(text) {
+  if (/исправ|почин|устран/i.test(text)) return "fixed";
+  if (/добав|появ|нов/i.test(text)) return "new";
+  return "updated";
+}
+
+function genericReleaseTitle(text) {
+  return cleanReleaseLine(text, 62)
+    .replace(/[.:;]+$/, "")
+    .replace(/^(добавлен[аоы]?|обновлен[аоы]?|исправлен[аоы]?)\s+/i, "");
+}
+
+function buildReleaseChanges(group) {
+  const usedBullets = new Set();
+  const changes = [];
+
+  for (const definition of [...RELEASE_FEATURES].sort(
+    (left, right) => right.priority - left.priority,
+  )) {
+    const matching = group.bullets.filter((bullet) => definition.pattern.test(bullet));
+    if (!matching.length) continue;
+    matching.forEach((bullet) => usedBullets.add(bullet));
+    const { priority, pattern, ...feature } = definition;
+    changes.push({
+      ...feature,
+      what: cleanReleaseLine(matching.join(" ")),
+    });
+    if (changes.length === 3) return changes;
+  }
+
+  for (const bullet of group.bullets) {
+    if (usedBullets.has(bullet)) continue;
+    changes.push({
+      id: `release-${changes.length + 1}`,
+      status: genericReleaseStatus(bullet),
+      title: genericReleaseTitle(bullet),
+      what: cleanReleaseLine(bullet),
+      how: `Обнови GCod до версии ${group.version} и используй функцию как обычно.`,
+      why: "Изменение вошло в готовый пакет релиза и доступно после обновления.",
+    });
+    if (changes.length === 3) break;
+  }
+
+  return changes;
+}
+
+function buildGithubReleaseReport(releases, repository, branch, cutoff) {
+  const groups = groupGithubReleases(releases);
+  const latest = groups[0];
+  if (!latest) return null;
+
+  const isDraft = latest.releases.every((release) => release?.draft === true);
+  if (!isDraft && latest.timestamp < cutoff) return null;
+
+  const previous = groups.find(
+    (group) =>
+      compareVersions(group.version, latest.version) < 0 &&
+      group.releases.some((release) => release?.draft !== true),
+  );
+  const changes = buildReleaseChanges(latest);
+  if (!changes.length) return null;
+
+  return {
+    mode: "changes",
+    variant: "release",
+    repository,
+    branch,
+    generated_at: new Date().toISOString(),
+    period_start: previous?.representative?.published_at || "",
+    period_end: latest.timestamp ? new Date(latest.timestamp).toISOString() : "",
+    head_sha: latest.version,
+    commits_count: 0,
+    release_version: latest.version,
+    release_url: latest.representative?.html_url || "",
+    report_title: `GCod ${latest.version.replace(/^v/i, "")}: что изменилось`,
+    summary: isDraft
+      ? `Версия ${latest.version.replace(/^v/i, "")} уже собрана и загружена в GitHub как черновик релиза.`
+      : `Версия ${latest.version.replace(/^v/i, "")} опубликована в GitHub и готова к установке.`,
+    baseline_note: previous
+      ? `Сравнение: ${previous.version.replace(/^v/i, "")} → ${latest.version.replace(/^v/i, "")}.`
+      : "Показываем содержимое последнего релиза без сравнения с предыдущей версией.",
+    changes,
+    technical: {
+      assets: latest.assets.length,
+      draft: isDraft,
+      duplicate_releases: latest.releases.length,
+    },
+    truncated: false,
+  };
+}
+
 async function collectGithubReport(env) {
   const repository = env.GCOD_REPOSITORY || "demideilan531-star/GCod-";
   const branch = env.GCOD_REF_NAME || "main";
@@ -221,13 +440,22 @@ async function collectGithubReport(env) {
   const lookbackDays = Math.max(1, Number(env.GITHUB_LOOKBACK_DAYS || 30));
   const cutoff = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
 
-  const [repo, commits] = await Promise.all([
+  const [repo, commits, releases] = await Promise.all([
     githubApi(env, `/repos/${encoded}`),
     githubApi(env, `/repos/${encoded}/commits?sha=${encodeURIComponent(branch)}&per_page=10`),
+    githubApi(env, `/repos/${encoded}/releases?per_page=30`),
   ]);
   if (!Array.isArray(commits) || commits.length === 0) {
     throw new Error("В GCod- не найдено ни одного коммита.");
   }
+
+  const releaseReport = buildGithubReleaseReport(
+    releases,
+    repository,
+    repo.default_branch || branch,
+    cutoff,
+  );
+  if (releaseReport) return releaseReport;
 
   const recent = commits.filter((commit) => {
     const date = Date.parse(commit?.commit?.committer?.date || commit?.commit?.author?.date || "");
@@ -298,6 +526,8 @@ async function collectGithubReport(env) {
     truncated,
   };
 }
+
+export { buildGithubReleaseReport, compareVersions, groupGithubReleases, versionParts };
 
 async function dispatchGithubWorkflow(env, chatId) {
   const report = await collectGithubReport(env);
