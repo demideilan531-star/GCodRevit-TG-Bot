@@ -19,6 +19,12 @@
       "database_name": "gcodrevit-tasks",
       "database_id": "17b9caae-ba34-458f-8ecf-23eedd840295",
       "migrations_dir": "migrations"
+    },
+    {
+      "binding": "CHAT_CONTEXT_DB",
+      "database_name": "gcodrevit-chat-context",
+      "database_id": "264a226d-f665-441b-bcd6-528ff58fce9e",
+      "migrations_dir": "chat-migrations"
     }
   ],
   "vars": {
@@ -32,6 +38,7 @@
     "GMAIL_WORKFLOW_ID": "hourly-gmail-telegram.yml",
     "WEATHER_WORKFLOW_ID": "weather-report.yml",
     "TASKS_APP_URL": "https://gcodrevit-telegram-bot.demideilan531.workers.dev/tasks/",
+    "CHAT_CONTEXT_RETENTION_DAYS": "30",
     "TASKS_TEXT_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "TASKS_SPEECH_MODEL": "@cf/openai/whisper-large-v3-turbo"
   }

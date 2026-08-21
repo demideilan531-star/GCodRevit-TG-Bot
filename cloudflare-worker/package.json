@@ -6,7 +6,7 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "test": "node --test ../tests/test_worker_github_release.mjs ../tests/test_task_manager.mjs"
+    "test": "node --test ../tests/test_worker_github_release.mjs ../tests/test_task_manager.mjs ../tests/test_chat_context.mjs"
   },
   "devDependencies": {
     "wrangler": "4.27.0"

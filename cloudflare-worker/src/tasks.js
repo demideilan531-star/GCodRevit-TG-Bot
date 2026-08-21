@@ -463,7 +463,7 @@ function adminIdSet(env) {
   );
 }
 
-async function apiUser(request, env) {
+export async function authorizedMiniAppUser(request, env) {
   const authorization = request.headers.get("Authorization") || "";
   const initData = authorization.startsWith("tma ")
     ? authorization.slice(4)
@@ -580,7 +580,7 @@ async function updateTaskFromApi(env, ownerId, taskId, body) {
 export async function handleTaskApi(request, env) {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/tasks")) return null;
-  const user = await apiUser(request, env);
+  const user = await authorizedMiniAppUser(request, env);
   if (!user) return json({ error: "Открой приложение из Telegram-бота." }, 401);
   const suffix = url.pathname.slice("/api/tasks".length).replace(/^\//, "");
   const taskId = suffix || "";

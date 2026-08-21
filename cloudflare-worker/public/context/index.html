@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Контекст Telegram</title>
+    <link rel="stylesheet" href="./context.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js?61"></script>
+    <script src="./context.js" type="module"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <nav class="product-switch" aria-label="Раздел приложения">
+        <a href="/tasks/">Задачи</a>
+        <a class="active" href="/context/">Контекст</a>
+      </nav>
+
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Telegram</p>
+          <h1>Контекст</h1>
+        </div>
+        <button class="icon-button" id="refreshButton" type="button" aria-label="Обновить" title="Обновить">↻</button>
+      </header>
+
+      <section class="status-band" id="statusBand" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
+        <div>
+          <strong id="statusTitle">Проверка подключения</strong>
+          <span id="statusDetail"></span>
+        </div>
+      </section>
+
+      <main>
+        <section class="controls" aria-label="Параметры выгрузки">
+          <label class="field chat-field">
+            <span>Чат</span>
+            <select id="chatSelect" disabled>
+              <option value="">Нет сохранённых чатов</option>
+            </select>
+          </label>
+          <label class="field limit-field">
+            <span>Сообщений</span>
+            <select id="limitSelect">
+              <option value="20">20</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="context-heading" aria-labelledby="chatHeading">
+          <div>
+            <h2 id="chatHeading">Переписка</h2>
+            <p id="messageSummary">Сообщений пока нет</p>
+          </div>
+          <button class="icon-button danger" id="deleteButton" type="button" aria-label="Удалить контекст чата" title="Удалить контекст чата" disabled>⌫</button>
+        </section>
+
+        <div class="message-list" id="messageList" aria-live="polite"></div>
+
+        <div class="export-actions">
+          <button class="secondary-button" id="copyButton" type="button" disabled>Копировать</button>
+          <button class="primary-button" id="downloadButton" type="button" disabled>Скачать .md</button>
+        </div>
+      </main>
+    </div>
+
+    <div class="loading-overlay" id="loadingOverlay" aria-live="polite">
+      <span class="spinner"></span>
+      <span>Загрузка контекста</span>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

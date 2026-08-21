@@ -3,6 +3,11 @@ import {
   handleTaskUpdate,
   taskAppUrl,
 } from "./tasks.js";
+import {
+  businessAllowedUpdates,
+  handleBusinessUpdate,
+  handleContextApi,
+} from "./chat-context.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_GITHUB = "🧩 GitHub";
@@ -710,7 +715,7 @@ function configureTelegramWebhook(env) {
   return telegramApi(env, "setWebhook", {
     url: telegramWebhookUrl(env),
     secret_token: env.TELEGRAM_WEBHOOK_SECRET,
-    allowed_updates: ["message", "callback_query"],
+    allowed_updates: businessAllowedUpdates(),
   });
 }
 
@@ -751,6 +756,10 @@ async function dispatchVideoWorkflow(env, chatId, message, video) {
 }
 
 async function handleUpdate(update, env, ctx) {
+  if (await handleBusinessUpdate(update, env, ctx, { telegramApi })) {
+    return;
+  }
+
   const message = update.message;
   const actor = message?.from || update.callback_query?.from;
   const chatId = message?.chat?.id || update.callback_query?.message?.chat?.id;
@@ -889,6 +898,8 @@ async function handleUpdate(update, env, ctx) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const contextApiResponse = await handleContextApi(request, env);
+    if (contextApiResponse) return contextApiResponse;
     const taskApiResponse = await handleTaskApi(request, env);
     if (taskApiResponse) return taskApiResponse;
 
@@ -933,6 +944,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/tasks") {
       return Response.redirect(`${url.origin}/tasks/`, 302);
+    }
+
+    if (request.method === "GET" && url.pathname === "/context") {
+      return Response.redirect(`${url.origin}/context/`, 302);
     }
 
     if ((request.method === "GET" || request.method === "HEAD") && env.ASSETS) {

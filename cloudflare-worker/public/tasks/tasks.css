@@ -59,6 +59,34 @@ select:focus-visible {
   padding: max(14px, env(safe-area-inset-top)) 14px max(24px, env(safe-area-inset-bottom));
 }
 
+.product-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  height: 38px;
+  margin-bottom: 8px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.product-switch a {
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.product-switch a.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px color-mix(in srgb, #000000 12%, transparent);
+}
+
 .app-header,
 .calendar-toolbar,
 .dialog-header,
