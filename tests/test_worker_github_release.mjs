@@ -1,13 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 
-const source = await readFile(
-  new URL("../cloudflare-worker/src/index.js", import.meta.url),
-  "utf8",
-);
-const worker = await import(
-  `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
-);
+const worker = await import(new URL("../cloudflare-worker/src/index.js", import.meta.url));
 
 const assets = Array.from({ length: 10 }, (_, index) => ({
   name: `asset-${index + 1}.zip`,

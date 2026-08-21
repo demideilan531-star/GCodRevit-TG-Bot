@@ -1,0 +1,6 @@
+/tasks/*
+  Cache-Control: no-cache
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; connect-src 'self'; img-src 'self' data: https:; font-src 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org
+  Permissions-Policy: camera=(), geolocation=(), microphone=()
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff

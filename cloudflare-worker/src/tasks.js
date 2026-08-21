@@ -1,0 +1,656 @@
+export const BUTTON_TASK_CREATE = "➕ Задача";
+export const BUTTON_TASKS = "📅 Задачи";
+
+export const TASK_FLAGS = [
+  { id: "work", label: "Работа" },
+  { id: "study", label: "Учёба" },
+  { id: "gcod", label: "GCodRevit" },
+  { id: "personal", label: "Личное" },
+  { id: "urgent", label: "Срочно" },
+];
+
+const TASK_FLAG_IDS = new Set(TASK_FLAGS.map((flag) => flag.id));
+const TASK_STATUSES = new Set(["draft", "todo", "in_progress", "done", "archived"]);
+const DEFAULT_TIMEZONE = "Europe/Moscow";
+const DEFAULT_APP_URL = "https://gcodrevit-telegram-bot.demideilan531.workers.dev/tasks/";
+const MAX_BODY_BYTES = 12 * 1024;
+const MAX_VOICE_BYTES = 5 * 1024 * 1024;
+
+function tasksDb(env) {
+  if (!env.TASKS_DB) {
+    throw new Error("База задач TASKS_DB ещё не подключена.");
+  }
+  return env.TASKS_DB;
+}
+
+export function taskAppUrl(env, taskId = "") {
+  const configured = String(env.TASKS_APP_URL || DEFAULT_APP_URL).trim();
+  const url = new URL(configured);
+  if (taskId) url.searchParams.set("task", taskId);
+  return url.toString();
+}
+
+export function taskKeyboardRow(env) {
+  return [
+    { text: BUTTON_TASK_CREATE },
+    { text: BUTTON_TASKS, web_app: { url: taskAppUrl(env) } },
+  ];
+}
+
+function cleanText(value, maxLength) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function normalizeFlags(value, sourceText = "") {
+  const flags = Array.isArray(value) ? value : [];
+  const normalized = [...new Set(flags.map(String).filter((flag) => TASK_FLAG_IDS.has(flag)))];
+  const lower = sourceText.toLowerCase();
+  const fallbacks = [
+    ["urgent", /(срочн|важн|немедленно)/i],
+    ["study", /(уч[её]б|универ|курс|экзамен|лекци)/i],
+    ["gcod", /(gcod|revit|navisworks|bim)/i],
+    ["work", /(работ|проект|заказчик|коллег)/i],
+  ];
+  for (const [flag, pattern] of fallbacks) {
+    if (pattern.test(lower) && !normalized.includes(flag)) normalized.push(flag);
+  }
+  if (!normalized.some((flag) => flag !== "urgent")) normalized.push("personal");
+  return normalized.slice(0, TASK_FLAGS.length);
+}
+
+function normalizeDueAt(value) {
+  if (value == null || value === "") return null;
+  const parsed = Date.parse(String(value));
+  if (!Number.isFinite(parsed)) return null;
+  const year = new Date(parsed).getUTCFullYear();
+  if (year < 2020 || year > 2100) return null;
+  return new Date(parsed).toISOString();
+}
+
+export function fallbackTaskDraft(sourceText) {
+  const text = cleanText(sourceText, 3000);
+  const firstSentence = text.split(/[.!?\n]/)[0] || text;
+  return {
+    title: cleanText(firstSentence, 96) || "Новая задача",
+    description: text,
+    due_at: null,
+    flags: normalizeFlags([], text),
+  };
+}
+
+export function normalizeTaskDraft(value, sourceText) {
+  const fallback = fallbackTaskDraft(sourceText);
+  const candidate = value && typeof value === "object" ? value : {};
+  return {
+    title: cleanText(candidate.title, 120) || fallback.title,
+    description: cleanText(candidate.description, 2000) || fallback.description,
+    due_at: normalizeDueAt(candidate.due_at),
+    flags: normalizeFlags(candidate.flags, sourceText),
+  };
+}
+
+function responseObject(result) {
+  const candidate = result?.response ?? result?.result?.response ?? result;
+  if (candidate && typeof candidate === "object") return candidate;
+  if (typeof candidate !== "string") return null;
+  try {
+    return JSON.parse(candidate.replace(/^```json\s*|\s*```$/g, ""));
+  } catch {
+    return null;
+  }
+}
+
+function currentMoscowTime() {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: DEFAULT_TIMEZONE,
+    dateStyle: "full",
+    timeStyle: "long",
+  }).format(new Date());
+}
+
+export async function parseTaskText(env, sourceText) {
+  const text = cleanText(sourceText, 3000);
+  if (!text) throw new Error("Описание задачи пустое.");
+  if (!env.AI) return fallbackTaskDraft(text);
+
+  const schema = {
+    type: "object",
+    properties: {
+      title: { type: "string", maxLength: 120 },
+      description: { type: "string", maxLength: 2000 },
+      due_at: { type: ["string", "null"] },
+      flags: {
+        type: "array",
+        items: { type: "string", enum: [...TASK_FLAG_IDS] },
+        maxItems: TASK_FLAGS.length,
+      },
+    },
+    required: ["title", "description", "due_at", "flags"],
+    additionalProperties: false,
+  };
+
+  try {
+    const result = await env.AI.run(
+      env.TASKS_TEXT_MODEL || "@cf/meta/llama-3.1-8b-instruct-fast",
+      {
+        messages: [
+          {
+            role: "system",
+            content: [
+              "Ты превращаешь русскоязычный запрос в задачу.",
+              "Выдели короткое конкретное название и сохрани важные детали в описании.",
+              `Текущее время: ${currentMoscowTime()}. Часовой пояс: ${DEFAULT_TIMEZONE}.`,
+              "Если срок относительный, вычисли его. Если время не названо, используй 18:00.",
+              "Верни due_at в ISO 8601 с часовым поясом или null, если срока действительно нет.",
+              "Допустимые флажки: work, study, gcod, personal, urgent. Можно выбрать несколько.",
+              "Не придумывай факты, исполнителей и сроки, которых нет в запросе.",
+            ].join(" "),
+          },
+          { role: "user", content: text },
+        ],
+        response_format: { type: "json_schema", json_schema: schema },
+        temperature: 0.1,
+        max_tokens: 500,
+      },
+    );
+    return normalizeTaskDraft(responseObject(result), text);
+  } catch (error) {
+    console.error("Task parsing fallback", error);
+    return fallbackTaskDraft(text);
+  }
+}
+
+async function telegramFile(env, fileId, telegramApi) {
+  const file = await telegramApi(env, "getFile", { file_id: fileId });
+  const filePath = String(file?.result?.file_path || "");
+  if (!filePath) throw new Error("Telegram не вернул файл голосового сообщения.");
+  const response = await fetch(
+    `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${filePath}`,
+  );
+  if (!response.ok) throw new Error(`Не удалось скачать голосовое: HTTP ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > MAX_VOICE_BYTES) {
+    throw new Error("Голосовое сообщение слишком большое. Максимум 5 МБ.");
+  }
+  return buffer;
+}
+
+export async function transcribeVoice(env, message, telegramApi) {
+  if (!env.AI) throw new Error("Workers AI ещё не подключён к боту.");
+  const voice = message.voice || message.audio;
+  if (!voice?.file_id) throw new Error("В сообщении нет голосового файла.");
+  if (Number(voice.file_size || 0) > MAX_VOICE_BYTES) {
+    throw new Error("Голосовое сообщение слишком большое. Максимум 5 МБ.");
+  }
+  const buffer = await telegramFile(env, voice.file_id, telegramApi);
+  const result = await env.AI.run(
+    env.TASKS_SPEECH_MODEL || "@cf/openai/whisper-large-v3-turbo",
+    {
+      audio: Array.from(new Uint8Array(buffer)),
+      task: "transcribe",
+      language: "ru",
+      vad_filter: true,
+      initial_prompt: "Задача, работа, учёба, GCodRevit, Revit, Navisworks, BIM, дедлайн.",
+    },
+  );
+  const text = cleanText(result?.text || result?.transcription_info?.text, 3000);
+  if (!text) throw new Error("Не удалось распознать речь в голосовом сообщении.");
+  return text;
+}
+
+function serializeTask(row) {
+  if (!row) return null;
+  let flags = [];
+  try {
+    flags = JSON.parse(row.flags_json || "[]");
+  } catch {
+    flags = [];
+  }
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description || "",
+    due_at: row.due_at || null,
+    timezone: row.timezone || DEFAULT_TIMEZONE,
+    status: row.status,
+    flags: normalizeFlags(flags),
+    source_type: row.source_type,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    completed_at: row.completed_at || null,
+  };
+}
+
+async function insertTask(env, ownerId, draft, sourceType, sourceText, status = "draft") {
+  const db = tasksDb(env);
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  await db
+    .prepare(
+      `INSERT INTO tasks
+        (id, owner_id, title, description, due_at, timezone, status, flags_json,
+         source_type, source_text, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      id,
+      String(ownerId),
+      draft.title,
+      draft.description,
+      draft.due_at,
+      DEFAULT_TIMEZONE,
+      status,
+      JSON.stringify(draft.flags),
+      sourceType,
+      cleanText(sourceText, 3000),
+      now,
+      now,
+    )
+    .run();
+  return { id, ...draft, status, created_at: now, updated_at: now };
+}
+
+async function setCaptureMode(env, ownerId, enabled) {
+  const db = tasksDb(env);
+  if (!enabled) {
+    await db.prepare("DELETE FROM task_sessions WHERE owner_id = ?").bind(String(ownerId)).run();
+    return;
+  }
+  await db
+    .prepare(
+      `INSERT INTO task_sessions (owner_id, mode, updated_at)
+       VALUES (?, 'capture', ?)
+       ON CONFLICT(owner_id) DO UPDATE SET mode = 'capture', updated_at = excluded.updated_at`,
+    )
+    .bind(String(ownerId), new Date().toISOString())
+    .run();
+}
+
+async function hasCaptureMode(env, ownerId) {
+  const row = await tasksDb(env)
+    .prepare("SELECT mode FROM task_sessions WHERE owner_id = ?")
+    .bind(String(ownerId))
+    .first();
+  return row?.mode === "capture";
+}
+
+function formatDueAt(value) {
+  if (!value) return "Без срока";
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: DEFAULT_TIMEZONE,
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function formatFlags(flags) {
+  const labels = new Map(TASK_FLAGS.map((flag) => [flag.id, flag.label]));
+  return flags.map((flag) => labels.get(flag)).filter(Boolean).join(" · ") || "Личное";
+}
+
+function taskPreview(task, transcript = "") {
+  const lines = [
+    "Проверь задачу",
+    "",
+    task.title,
+    task.description,
+    "",
+    `Срок: ${formatDueAt(task.due_at)}`,
+    `Флажки: ${formatFlags(task.flags)}`,
+  ];
+  if (transcript) lines.push("", `Распознано: ${cleanText(transcript, 500)}`);
+  return lines.join("\n").slice(0, 3900);
+}
+
+async function sendTaskPreview(env, chatId, task, transcript, telegramApi) {
+  await telegramApi(env, "sendMessage", {
+    chat_id: chatId,
+    text: taskPreview(task, transcript),
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅ Сохранить", callback_data: `task:save:${task.id}` },
+          { text: "Отменить", callback_data: `task:cancel:${task.id}` },
+        ],
+        [{ text: "✏️ Изменить", web_app: { url: taskAppUrl(env, task.id) } }],
+      ],
+    },
+  });
+}
+
+async function processTaskSubmission(env, chatId, ownerId, message, telegramApi) {
+  try {
+    const isVoice = Boolean(message.voice || message.audio);
+    const sourceText = isVoice
+      ? await transcribeVoice(env, message, telegramApi)
+      : cleanText(String(message.text || "").replace(/^\/task(?:@\w+)?\s*/i, ""), 3000);
+    const draft = await parseTaskText(env, sourceText);
+    const task = await insertTask(env, ownerId, draft, isVoice ? "voice" : "text", sourceText);
+    await setCaptureMode(env, ownerId, false);
+    await sendTaskPreview(env, chatId, task, isVoice ? sourceText : "", telegramApi);
+  } catch (error) {
+    console.error("Task submission failed", error);
+    await telegramApi(env, "sendMessage", {
+      chat_id: chatId,
+      text: `Не удалось разобрать задачу: ${error.message}`,
+    });
+  }
+}
+
+async function handleTaskCallback(update, env, telegramApi) {
+  const query = update.callback_query;
+  const match = String(query?.data || "").match(/^task:(save|cancel):([0-9a-f-]{36})$/i);
+  if (!match) return false;
+  const [, action, taskId] = match;
+  const ownerId = String(query.from.id);
+  const db = tasksDb(env);
+  const existing = await db
+    .prepare("SELECT id, title FROM tasks WHERE id = ? AND owner_id = ? AND status = 'draft'")
+    .bind(taskId, ownerId)
+    .first();
+  if (!existing) {
+    await telegramApi(env, "answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Эта задача уже обработана.",
+    });
+    return true;
+  }
+
+  if (action === "save") {
+    await db
+      .prepare("UPDATE tasks SET status = 'todo', updated_at = ? WHERE id = ? AND owner_id = ?")
+      .bind(new Date().toISOString(), taskId, ownerId)
+      .run();
+    await telegramApi(env, "answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Задача сохранена",
+    });
+    await telegramApi(env, "sendMessage", {
+      chat_id: query.message.chat.id,
+      text: `Задача «${cleanText(existing.title, 100)}» сохранена.`,
+      reply_markup: {
+        inline_keyboard: [[{ text: "📅 Открыть задачи", web_app: { url: taskAppUrl(env) } }]],
+      },
+    });
+  } else {
+    await db.prepare("DELETE FROM tasks WHERE id = ? AND owner_id = ?").bind(taskId, ownerId).run();
+    await telegramApi(env, "answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Черновик удалён",
+    });
+  }
+  if (query.message?.chat?.id && query.message?.message_id) {
+    await telegramApi(env, "editMessageReplyMarkup", {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+      reply_markup: { inline_keyboard: [] },
+    });
+  }
+  return true;
+}
+
+export async function handleTaskUpdate(update, env, ctx, helpers) {
+  const { telegramApi, sendMessage, reservedTexts = new Set() } = helpers;
+  if (update.callback_query) {
+    return handleTaskCallback(update, env, telegramApi);
+  }
+
+  const message = update.message;
+  if (!message?.from?.id || !message?.chat?.id) return false;
+  const text = String(message.text || "").trim();
+  const ownerId = Number(message.from.id);
+  const chatId = message.chat.id;
+
+  if (text === BUTTON_TASK_CREATE) {
+    await setCaptureMode(env, ownerId, true);
+    await sendMessage(
+      env,
+      chatId,
+      "Напиши задачу обычным сообщением или отправь голосовое. Я выделю главное, срок и флажки.",
+    );
+    return true;
+  }
+
+  if (text === BUTTON_TASKS) {
+    await telegramApi(env, "sendMessage", {
+      chat_id: chatId,
+      text: "Открой календарь задач.",
+      reply_markup: {
+        inline_keyboard: [[{ text: "📅 Открыть", web_app: { url: taskAppUrl(env) } }]],
+      },
+    });
+    return true;
+  }
+
+  if (text === "/cancel") {
+    await setCaptureMode(env, ownerId, false);
+    await sendMessage(env, chatId, "Создание задачи отменено.");
+    return true;
+  }
+
+  if (reservedTexts.has(text)) {
+    await setCaptureMode(env, ownerId, false);
+    return false;
+  }
+
+  const directCommand = /^\/task(?:@\w+)?\s+.+/is.test(text);
+  const voice = Boolean(message.voice || message.audio);
+  const capture = !directCommand && !voice ? await hasCaptureMode(env, ownerId) : false;
+  if (!directCommand && !voice && !capture) return false;
+
+  await telegramApi(env, "sendMessage", {
+    chat_id: chatId,
+    text: voice ? "Распознаю голосовое и собираю задачу…" : "Разбираю задачу…",
+  });
+  ctx.waitUntil(processTaskSubmission(env, chatId, ownerId, message, telegramApi));
+  return true;
+}
+
+function bytesToHex(bytes) {
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function constantTimeEqual(left, right) {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+async function hmac(keyBytes, value) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+}
+
+export async function validateTelegramInitData(initData, botToken, maxAgeSeconds = 86400) {
+  if (!initData || !botToken) return null;
+  const params = new URLSearchParams(initData);
+  const receivedHash = params.get("hash") || "";
+  if (!receivedHash) return null;
+  params.delete("hash");
+  const dataCheck = [...params.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+  const secret = await hmac(new TextEncoder().encode("WebAppData"), botToken);
+  const calculated = bytesToHex(await hmac(secret, dataCheck));
+  if (!constantTimeEqual(calculated, receivedHash.toLowerCase())) return null;
+
+  const authDate = Number(params.get("auth_date") || 0);
+  if (!authDate || Math.abs(Date.now() / 1000 - authDate) > maxAgeSeconds) return null;
+  try {
+    const user = JSON.parse(params.get("user") || "null");
+    return user?.id ? user : null;
+  } catch {
+    return null;
+  }
+}
+
+function adminIdSet(env) {
+  return new Set(
+    String(env.TELEGRAM_ADMIN_IDS || "1839693017")
+      .split(/[\s,;]+/)
+      .filter(Boolean)
+      .map(String),
+  );
+}
+
+async function apiUser(request, env) {
+  const authorization = request.headers.get("Authorization") || "";
+  const initData = authorization.startsWith("tma ")
+    ? authorization.slice(4)
+    : request.headers.get("X-Telegram-Init-Data") || "";
+  const user = await validateTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN);
+  if (!user || !adminIdSet(env).has(String(user.id))) return null;
+  return user;
+}
+
+function json(data, status = 200) {
+  return Response.json(data, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
+async function requestJson(request) {
+  const declared = Number(request.headers.get("Content-Length") || 0);
+  if (declared > MAX_BODY_BYTES) throw new Error("Слишком большой запрос.");
+  const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
+    throw new Error("Слишком большой запрос.");
+  }
+  return text ? JSON.parse(text) : {};
+}
+
+export function validateTaskPayload(value, { partial = false } = {}) {
+  const body = value && typeof value === "object" ? value : {};
+  const result = {};
+  if (!partial || Object.hasOwn(body, "title")) {
+    result.title = cleanText(body.title, 120);
+    if (!result.title) throw new Error("Укажи название задачи.");
+  }
+  if (!partial || Object.hasOwn(body, "description")) {
+    result.description = cleanText(body.description, 2000);
+  }
+  if (!partial || Object.hasOwn(body, "due_at")) {
+    result.due_at = normalizeDueAt(body.due_at);
+    if (body.due_at && !result.due_at) throw new Error("Некорректный срок задачи.");
+  }
+  if (!partial || Object.hasOwn(body, "flags")) {
+    result.flags = normalizeFlags(body.flags);
+  }
+  if (Object.hasOwn(body, "status")) {
+    const status = String(body.status);
+    if (!TASK_STATUSES.has(status) || status === "draft") throw new Error("Некорректный статус.");
+    result.status = status;
+  }
+  return result;
+}
+
+async function listTasks(env, ownerId) {
+  const result = await tasksDb(env)
+    .prepare(
+      `SELECT * FROM tasks
+       WHERE owner_id = ? AND status NOT IN ('draft', 'archived')
+       ORDER BY CASE WHEN due_at IS NULL THEN 1 ELSE 0 END, due_at, created_at DESC
+       LIMIT 500`,
+    )
+    .bind(String(ownerId))
+    .all();
+  return (result.results || []).map(serializeTask);
+}
+
+async function getTask(env, ownerId, taskId) {
+  const row = await tasksDb(env)
+    .prepare("SELECT * FROM tasks WHERE id = ? AND owner_id = ? AND status != 'archived'")
+    .bind(taskId, String(ownerId))
+    .first();
+  return serializeTask(row);
+}
+
+async function createTaskFromApi(env, ownerId, body) {
+  const draft = validateTaskPayload(body);
+  return insertTask(env, ownerId, draft, "mini_app", body.description || body.title, "todo");
+}
+
+async function updateTaskFromApi(env, ownerId, taskId, body) {
+  const changes = validateTaskPayload(body, { partial: true });
+  const assignments = [];
+  const values = [];
+  for (const [field, value] of Object.entries(changes)) {
+    if (field === "flags") {
+      assignments.push("flags_json = ?");
+      values.push(JSON.stringify(value));
+    } else {
+      assignments.push(`${field} = ?`);
+      values.push(value);
+    }
+  }
+  if (!assignments.length) throw new Error("Нет изменений для сохранения.");
+  if (changes.status === "done") {
+    assignments.push("completed_at = ?");
+    values.push(new Date().toISOString());
+  } else if (changes.status) {
+    assignments.push("completed_at = NULL");
+  }
+  assignments.push("updated_at = ?");
+  values.push(new Date().toISOString(), taskId, String(ownerId));
+  await tasksDb(env)
+    .prepare(
+      `UPDATE tasks SET ${assignments.join(", ")}
+       WHERE id = ? AND owner_id = ? AND status != 'archived'`,
+    )
+    .bind(...values)
+    .run();
+  return getTask(env, ownerId, taskId);
+}
+
+export async function handleTaskApi(request, env) {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith("/api/tasks")) return null;
+  const user = await apiUser(request, env);
+  if (!user) return json({ error: "Открой приложение из Telegram-бота." }, 401);
+  const suffix = url.pathname.slice("/api/tasks".length).replace(/^\//, "");
+  const taskId = suffix || "";
+
+  try {
+    if (request.method === "GET" && !taskId) {
+      return json({ tasks: await listTasks(env, user.id), flags: TASK_FLAGS });
+    }
+    if (request.method === "GET" && taskId) {
+      const task = await getTask(env, user.id, taskId);
+      return task ? json({ task }) : json({ error: "Задача не найдена." }, 404);
+    }
+    if (request.method === "POST" && !taskId) {
+      const task = await createTaskFromApi(env, user.id, await requestJson(request));
+      return json({ task }, 201);
+    }
+    if (request.method === "PATCH" && taskId) {
+      const task = await updateTaskFromApi(env, user.id, taskId, await requestJson(request));
+      return task ? json({ task }) : json({ error: "Задача не найдена." }, 404);
+    }
+    if (request.method === "DELETE" && taskId) {
+      await updateTaskFromApi(env, user.id, taskId, { status: "archived" });
+      return json({ ok: true });
+    }
+    return json({ error: "Метод не поддерживается." }, 405);
+  } catch (error) {
+    console.error("Tasks API error", error);
+    return json({ error: error.message || "Ошибка задач." }, 400);
+  }
+}

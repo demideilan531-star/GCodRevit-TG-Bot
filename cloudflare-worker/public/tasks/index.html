@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Задачи</title>
+    <link rel="stylesheet" href="./tasks.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js?61"></script>
+    <script src="./tasks.js" type="module"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div>
+          <p class="today-label" id="todayLabel"></p>
+          <h1>Задачи</h1>
+        </div>
+        <button class="icon-button primary" id="addTaskButton" type="button" aria-label="Новая задача" title="Новая задача">+</button>
+      </header>
+
+      <nav class="view-switch" aria-label="Представление задач">
+        <button type="button" class="active" data-view="list">Список</button>
+        <button type="button" data-view="calendar">Календарь</button>
+      </nav>
+
+      <main>
+        <section id="listView" class="view active" aria-labelledby="listHeading">
+          <h2 id="listHeading" class="visually-hidden">Список задач</h2>
+          <div class="summary-band" id="summaryBand"></div>
+          <div class="filter-row">
+            <label>
+              <span class="visually-hidden">Фильтр по флажку</span>
+              <select id="flagFilter">
+                <option value="all">Все флажки</option>
+              </select>
+            </label>
+            <label>
+              <span class="visually-hidden">Фильтр по состоянию</span>
+              <select id="statusFilter">
+                <option value="active">Активные</option>
+                <option value="done">Выполненные</option>
+                <option value="all">Все состояния</option>
+              </select>
+            </label>
+          </div>
+          <div id="taskGroups" class="task-groups"></div>
+        </section>
+
+        <section id="calendarView" class="view" aria-labelledby="calendarHeading">
+          <div class="calendar-toolbar">
+            <button class="icon-button" id="previousMonth" type="button" aria-label="Предыдущий месяц" title="Предыдущий месяц">‹</button>
+            <div>
+              <h2 id="calendarHeading"></h2>
+              <button class="text-button" id="currentMonth" type="button">Сегодня</button>
+            </div>
+            <button class="icon-button" id="nextMonth" type="button" aria-label="Следующий месяц" title="Следующий месяц">›</button>
+          </div>
+          <div class="weekday-row" aria-hidden="true">
+            <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span>
+          </div>
+          <div class="calendar-grid" id="calendarGrid"></div>
+          <section class="day-agenda" aria-labelledby="selectedDayHeading">
+            <h3 id="selectedDayHeading"></h3>
+            <div id="selectedDayTasks"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="taskDialog">
+      <form id="taskForm" method="dialog">
+        <div class="dialog-header">
+          <h2 id="dialogTitle">Новая задача</h2>
+          <button class="icon-button" id="closeDialog" type="button" aria-label="Закрыть" title="Закрыть">×</button>
+        </div>
+
+        <input id="taskId" type="hidden" />
+        <label class="field">
+          <span>Название</span>
+          <input id="taskTitle" name="title" maxlength="120" required autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Описание</span>
+          <textarea id="taskDescription" name="description" maxlength="2000" rows="4"></textarea>
+        </label>
+        <label class="field">
+          <span>Срок</span>
+          <input id="taskDueAt" name="due_at" type="datetime-local" />
+        </label>
+        <label class="field" id="statusField">
+          <span>Состояние</span>
+          <select id="taskStatus" name="status">
+            <option value="todo">К выполнению</option>
+            <option value="in_progress">В работе</option>
+            <option value="done">Выполнено</option>
+          </select>
+        </label>
+        <fieldset class="flag-fieldset">
+          <legend>Флажки</legend>
+          <div id="flagOptions" class="flag-options"></div>
+        </fieldset>
+
+        <div class="dialog-actions">
+          <button class="danger-button" id="deleteTaskButton" type="button">Удалить</button>
+          <span class="action-spacer"></span>
+          <button class="secondary-button" id="cancelTaskButton" type="button">Отмена</button>
+          <button class="primary-button" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="loading-overlay" id="loadingOverlay" aria-live="polite">
+      <span class="spinner"></span>
+      <span>Загрузка задач</span>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

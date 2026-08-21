@@ -5,6 +5,22 @@
   "compatibility_date": "2026-07-21",
   "workers_dev": true,
   "keep_vars": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "d1_databases": [
+    {
+      "binding": "TASKS_DB",
+      "database_name": "gcodrevit-tasks",
+      "database_id": "17b9caae-ba34-458f-8ecf-23eedd840295",
+      "migrations_dir": "migrations"
+    }
+  ],
   "vars": {
     "TELEGRAM_ADMIN_IDS": "1839693017",
     "GITHUB_REPOSITORY": "demideilan531-star/GCodRevit-TG-Bot",
@@ -14,6 +30,9 @@
     "GCOD_REF_NAME": "main",
     "GITHUB_LOOKBACK_DAYS": "30",
     "GMAIL_WORKFLOW_ID": "hourly-gmail-telegram.yml",
-    "WEATHER_WORKFLOW_ID": "weather-report.yml"
+    "WEATHER_WORKFLOW_ID": "weather-report.yml",
+    "TASKS_APP_URL": "https://gcodrevit-telegram-bot.demideilan531.workers.dev/tasks/",
+    "TASKS_TEXT_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
+    "TASKS_SPEECH_MODEL": "@cf/openai/whisper-large-v3-turbo"
   }
 }

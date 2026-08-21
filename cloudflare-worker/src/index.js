@@ -1,3 +1,9 @@
+import {
+  handleTaskApi,
+  handleTaskUpdate,
+  taskKeyboardRow,
+} from "./tasks.js";
+
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_GITHUB = "🧩 GitHub";
 const BUTTON_VIDEO = "🎬 Видео GCodRevit";
@@ -107,11 +113,12 @@ const RELEASE_FEATURES = [
   },
 ];
 
-function keyboard() {
+function keyboard(env) {
   return {
     keyboard: [
       [{ text: BUTTON_GMAIL }, { text: BUTTON_GITHUB }],
       [{ text: BUTTON_VIDEO }, { text: BUTTON_WEATHER }],
+      taskKeyboardRow(env),
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
@@ -679,7 +686,7 @@ async function claimGithubCooldown(userId) {
 function sendMessage(env, chatId, text, withKeyboard = true) {
   const payload = { chat_id: chatId, text };
   if (withKeyboard) {
-    payload.reply_markup = keyboard();
+    payload.reply_markup = keyboard(env);
   }
   return telegramApi(env, "sendMessage", payload);
 }
@@ -722,19 +729,48 @@ async function dispatchVideoWorkflow(env, chatId, message, video) {
 
 async function handleUpdate(update, env, ctx) {
   const message = update.message;
-  if (!message?.chat?.id || !message?.from?.id) {
+  const actor = message?.from || update.callback_query?.from;
+  const chatId = message?.chat?.id || update.callback_query?.message?.chat?.id;
+  if (!chatId || !actor?.id) {
     return;
   }
 
-  const chatId = message.chat.id;
-  const userId = Number(message.from.id);
-  const text = String(message.text || "").trim();
-  const video = videoAttachment(message);
+  const userId = Number(actor.id);
 
   if (!adminIds(env).has(userId)) {
-    await sendMessage(env, chatId, "У тебя нет доступа к запуску публикаций.", false);
+    if (update.callback_query?.id) {
+      await telegramApi(env, "answerCallbackQuery", {
+        callback_query_id: update.callback_query.id,
+        text: "У тебя нет доступа к задачам.",
+        show_alert: true,
+      });
+    } else {
+      await sendMessage(env, chatId, "У тебя нет доступа к запуску публикаций.", false);
+    }
     return;
   }
+
+  if (
+    await handleTaskUpdate(update, env, ctx, {
+      telegramApi,
+      sendMessage,
+      reservedTexts: new Set([
+        "/start",
+        "/menu",
+        BUTTON_GMAIL,
+        BUTTON_GITHUB,
+        BUTTON_VIDEO,
+        BUTTON_WEATHER,
+      ]),
+    })
+  ) {
+    return;
+  }
+
+  if (!message) return;
+
+  const text = String(message.text || "").trim();
+  const video = videoAttachment(message);
 
   if (text === "/start" || text === "/menu") {
     await sendMessage(env, chatId, "Выбери действие на клавиатуре. Подключены Gmail, погода и обработка видео.");
@@ -816,6 +852,9 @@ async function handleUpdate(update, env, ctx) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const taskApiResponse = await handleTaskApi(request, env);
+    if (taskApiResponse) return taskApiResponse;
+
     if (request.method === "GET" && url.pathname === "/health") {
       return new Response("OK", { status: 200 });
     }
@@ -853,6 +892,14 @@ export default {
         console.error("GitHub health check failed", error);
         return new Response("GitHub unavailable", { status: 503 });
       }
+    }
+
+    if (request.method === "GET" && url.pathname === "/tasks") {
+      return Response.redirect(`${url.origin}/tasks/`, 302);
+    }
+
+    if ((request.method === "GET" || request.method === "HEAD") && env.ASSETS) {
+      return env.ASSETS.fetch(request);
     }
 
     if (request.method !== "POST") {
