@@ -1,5 +1,5 @@
-export const BUTTON_TASK_CREATE = "➕ Задача";
-export const BUTTON_TASKS = "📅 Задачи";
+const BUTTON_TASK_CREATE = "➕ Задача";
+const BUTTON_TASKS = "📅 Задачи";
 
 export const TASK_FLAGS = [
   { id: "work", label: "Работа" },
@@ -28,13 +28,6 @@ export function taskAppUrl(env, taskId = "") {
   const url = new URL(configured);
   if (taskId) url.searchParams.set("task", taskId);
   return url.toString();
-}
-
-export function taskKeyboardRow(env) {
-  return [
-    { text: BUTTON_TASK_CREATE },
-    { text: BUTTON_TASKS, web_app: { url: taskAppUrl(env) } },
-  ];
 }
 
 function cleanText(value, maxLength) {
@@ -253,30 +246,6 @@ async function insertTask(env, ownerId, draft, sourceType, sourceText, status = 
   return { id, ...draft, status, created_at: now, updated_at: now };
 }
 
-async function setCaptureMode(env, ownerId, enabled) {
-  const db = tasksDb(env);
-  if (!enabled) {
-    await db.prepare("DELETE FROM task_sessions WHERE owner_id = ?").bind(String(ownerId)).run();
-    return;
-  }
-  await db
-    .prepare(
-      `INSERT INTO task_sessions (owner_id, mode, updated_at)
-       VALUES (?, 'capture', ?)
-       ON CONFLICT(owner_id) DO UPDATE SET mode = 'capture', updated_at = excluded.updated_at`,
-    )
-    .bind(String(ownerId), new Date().toISOString())
-    .run();
-}
-
-async function hasCaptureMode(env, ownerId) {
-  const row = await tasksDb(env)
-    .prepare("SELECT mode FROM task_sessions WHERE owner_id = ?")
-    .bind(String(ownerId))
-    .first();
-  return row?.mode === "capture";
-}
-
 function formatDueAt(value) {
   if (!value) return "Без срока";
   return new Intl.DateTimeFormat("ru-RU", {
@@ -329,7 +298,6 @@ async function processTaskSubmission(env, chatId, ownerId, message, telegramApi)
       : cleanText(String(message.text || "").replace(/^\/task(?:@\w+)?\s*/i, ""), 3000);
     const draft = await parseTaskText(env, sourceText);
     const task = await insertTask(env, ownerId, draft, isVoice ? "voice" : "text", sourceText);
-    await setCaptureMode(env, ownerId, false);
     await sendTaskPreview(env, chatId, task, isVoice ? sourceText : "", telegramApi);
   } catch (error) {
     console.error("Task submission failed", error);
@@ -405,41 +373,22 @@ export async function handleTaskUpdate(update, env, ctx, helpers) {
   const chatId = message.chat.id;
 
   if (text === BUTTON_TASK_CREATE) {
-    await setCaptureMode(env, ownerId, true);
     await sendMessage(
       env,
       chatId,
-      "Напиши задачу обычным сообщением или отправь голосовое. Я выделю главное, срок и флажки.",
+      "Эта кнопка больше не нужна. Просто напиши задачу обычным сообщением или отправь голосовое.",
     );
     return true;
   }
 
   if (text === BUTTON_TASKS) {
-    await telegramApi(env, "sendMessage", {
-      chat_id: chatId,
-      text: "Открой календарь задач.",
-      reply_markup: {
-        inline_keyboard: [[{ text: "📅 Открыть", web_app: { url: taskAppUrl(env) } }]],
-      },
-    });
+    await sendMessage(env, chatId, "Открой календарь кнопкой «Задачи» рядом со строкой ввода.");
     return true;
   }
 
-  if (text === "/cancel") {
-    await setCaptureMode(env, ownerId, false);
-    await sendMessage(env, chatId, "Создание задачи отменено.");
-    return true;
-  }
+  if (!shouldCreateTaskFromMessage(message, reservedTexts)) return false;
 
-  if (reservedTexts.has(text)) {
-    await setCaptureMode(env, ownerId, false);
-    return false;
-  }
-
-  const directCommand = /^\/task(?:@\w+)?\s+.+/is.test(text);
   const voice = Boolean(message.voice || message.audio);
-  const capture = !directCommand && !voice ? await hasCaptureMode(env, ownerId) : false;
-  if (!directCommand && !voice && !capture) return false;
 
   await telegramApi(env, "sendMessage", {
     chat_id: chatId,
@@ -447,6 +396,14 @@ export async function handleTaskUpdate(update, env, ctx, helpers) {
   });
   ctx.waitUntil(processTaskSubmission(env, chatId, ownerId, message, telegramApi));
   return true;
+}
+
+export function shouldCreateTaskFromMessage(message, reservedTexts = new Set()) {
+  if (message?.voice || message?.audio) return true;
+  const text = String(message?.text || "").trim();
+  if (!text || reservedTexts.has(text)) return false;
+  if (/^\/task(?:@\w+)?\s+.+/is.test(text)) return true;
+  return !text.startsWith("/");
 }
 
 function bytesToHex(bytes) {

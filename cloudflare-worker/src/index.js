@@ -1,7 +1,7 @@
 import {
   handleTaskApi,
   handleTaskUpdate,
-  taskKeyboardRow,
+  taskAppUrl,
 } from "./tasks.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
@@ -113,12 +113,11 @@ const RELEASE_FEATURES = [
   },
 ];
 
-function keyboard(env) {
+function keyboard() {
   return {
     keyboard: [
       [{ text: BUTTON_GMAIL }, { text: BUTTON_GITHUB }],
       [{ text: BUTTON_VIDEO }, { text: BUTTON_WEATHER }],
-      taskKeyboardRow(env),
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
@@ -686,9 +685,20 @@ async function claimGithubCooldown(userId) {
 function sendMessage(env, chatId, text, withKeyboard = true) {
   const payload = { chat_id: chatId, text };
   if (withKeyboard) {
-    payload.reply_markup = keyboard(env);
+    payload.reply_markup = keyboard();
   }
   return telegramApi(env, "sendMessage", payload);
+}
+
+function configureTaskMenu(env, chatId) {
+  return telegramApi(env, "setChatMenuButton", {
+    chat_id: chatId,
+    menu_button: {
+      type: "web_app",
+      text: "Задачи",
+      web_app: { url: taskAppUrl(env) },
+    },
+  });
 }
 
 async function dispatchGmailWorkflow(env, chatId) {
@@ -757,6 +767,8 @@ async function handleUpdate(update, env, ctx) {
       reservedTexts: new Set([
         "/start",
         "/menu",
+        "➕ Задача",
+        "📅 Задачи",
         BUTTON_GMAIL,
         BUTTON_GITHUB,
         BUTTON_VIDEO,
@@ -773,7 +785,16 @@ async function handleUpdate(update, env, ctx) {
   const video = videoAttachment(message);
 
   if (text === "/start" || text === "/menu") {
-    await sendMessage(env, chatId, "Выбери действие на клавиатуре. Подключены Gmail, погода и обработка видео.");
+    try {
+      await configureTaskMenu(env, chatId);
+    } catch (error) {
+      console.error("Task menu setup failed", error);
+    }
+    await sendMessage(
+      env,
+      chatId,
+      "Напиши задачу текстом или голосом. Календарь открывается кнопкой «Задачи» рядом со строкой ввода.",
+    );
     return;
   }
 

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   fallbackTaskDraft,
   normalizeTaskDraft,
+  shouldCreateTaskFromMessage,
   taskAppUrl,
   validateTaskPayload,
   validateTelegramInitData,
@@ -63,6 +64,16 @@ test("AI result is normalized and unknown flags are removed", () => {
 test("Mini App URL can target a draft", () => {
   const url = taskAppUrl({ TASKS_APP_URL: "https://example.com/tasks/" }, "task-id");
   assert.equal(url, "https://example.com/tasks/?task=task-id");
+});
+
+test("ordinary text and voice are tasks without a keyboard mode", () => {
+  const reserved = new Set(["🌤 Погода", "/start"]);
+  assert.equal(shouldCreateTaskFromMessage({ text: "Подготовить отчёт к пятнице" }, reserved), true);
+  assert.equal(shouldCreateTaskFromMessage({ text: "/task Позвонить заказчику" }, reserved), true);
+  assert.equal(shouldCreateTaskFromMessage({ voice: { file_id: "voice-id" } }, reserved), true);
+  assert.equal(shouldCreateTaskFromMessage({ text: "🌤 Погода" }, reserved), false);
+  assert.equal(shouldCreateTaskFromMessage({ text: "/start" }, reserved), false);
+  assert.equal(shouldCreateTaskFromMessage({ text: "/unknown" }, reserved), false);
 });
 
 test("task API payload validates required fields and partial updates", () => {

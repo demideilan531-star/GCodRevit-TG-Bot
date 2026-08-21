@@ -27,8 +27,7 @@ Do not store secret values in this directory or commit them to GitHub.
 The task manager is native to the Telegram workflow and does not use Excel as
 its primary storage:
 
-- `TASKS_DB` is a Cloudflare D1 binding containing tasks and short-lived input
-  sessions;
+- `TASKS_DB` is a Cloudflare D1 binding containing tasks;
 - `AI` is the Workers AI binding used to extract a title, description, due date
   and predefined flags from text, and to transcribe voice messages;
 - `ASSETS` serves the Telegram Mini App at `/tasks/`;
@@ -47,19 +46,17 @@ The D1 identifier returned by the first command belongs in
 `wrangler.jsonc`. No extra AI API key is required. Workers AI is authorized by
 the Cloudflare account binding.
 
-Use the bot in one of three ways:
-
-1. Press `➕ Задача`, then send ordinary text.
-2. Press `➕ Задача`, then send a voice message up to 5 MB.
-3. Send `/task <description>` without opening capture mode.
-
-Send `/cancel` to leave capture mode without creating a task. Pressing any of
-the existing Gmail, GitHub, video, or weather buttons also leaves capture mode
-and performs the original action.
+Send ordinary text or a voice message up to 5 MB directly to the bot. Every
+non-command message that is not one of the Gmail, GitHub, video, or weather
+buttons is treated as a new task. `/task <description>` remains available as an
+explicit alternative.
 
 The bot creates a draft and shows `Сохранить`, `Отменить`, and `Изменить`.
-The `📅 Задачи` keyboard button opens list and calendar views inside Telegram.
-Tasks can also be created, edited, completed, filtered, and deleted there.
+On `/start`, the bot configures a `Задачи` Telegram menu button next to the
+message field. It opens list and calendar views inside Telegram. Tasks can also
+be created, edited, completed, filtered, and deleted there. A prominent
+`Open App` profile button requires enabling the same URL as the bot's Main Mini
+App through `@BotFather`.
 
 Predefined flags are `Работа`, `Учёба`, `GCodRevit`, `Личное`, and `Срочно`.
 All deadlines are stored as ISO 8601 and displayed in `Europe/Moscow`.
