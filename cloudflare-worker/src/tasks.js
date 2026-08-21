@@ -382,7 +382,7 @@ export async function handleTaskUpdate(update, env, ctx, helpers) {
   }
 
   if (text === BUTTON_TASKS) {
-    await sendMessage(env, chatId, "Открой календарь кнопкой «Задачи» рядом со строкой ввода.");
+    await sendMessage(env, chatId, "Открой календарь кнопкой Open App в профиле бота.");
     return true;
   }
 

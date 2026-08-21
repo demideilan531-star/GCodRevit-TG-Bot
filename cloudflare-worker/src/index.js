@@ -657,6 +657,7 @@ export {
   compareVersions,
   groupGithubReleases,
   mergeGithubReleases,
+  telegramWebhookUrl,
   versionParts,
 };
 
@@ -690,14 +691,26 @@ function sendMessage(env, chatId, text, withKeyboard = true) {
   return telegramApi(env, "sendMessage", payload);
 }
 
-function configureTaskMenu(env, chatId) {
+function resetTaskMenu(env, chatId) {
   return telegramApi(env, "setChatMenuButton", {
     chat_id: chatId,
-    menu_button: {
-      type: "web_app",
-      text: "Задачи",
-      web_app: { url: taskAppUrl(env) },
-    },
+    menu_button: { type: "default" },
+  });
+}
+
+function telegramWebhookUrl(env) {
+  const url = new URL(taskAppUrl(env));
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function configureTelegramWebhook(env) {
+  return telegramApi(env, "setWebhook", {
+    url: telegramWebhookUrl(env),
+    secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+    allowed_updates: ["message", "callback_query"],
   });
 }
 
@@ -786,14 +799,17 @@ async function handleUpdate(update, env, ctx) {
 
   if (text === "/start" || text === "/menu") {
     try {
-      await configureTaskMenu(env, chatId);
+      await Promise.all([
+        resetTaskMenu(env, chatId),
+        configureTelegramWebhook(env),
+      ]);
     } catch (error) {
-      console.error("Task menu setup failed", error);
+      console.error("Telegram setup refresh failed", error);
     }
     await sendMessage(
       env,
       chatId,
-      "Напиши задачу текстом или голосом. Календарь открывается кнопкой «Задачи» рядом со строкой ввода.",
+      "Напиши задачу текстом или голосом. Календарь открывается кнопкой Open App в профиле бота.",
     );
     return;
   }

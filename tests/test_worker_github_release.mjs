@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 
 const worker = await import(new URL("../cloudflare-worker/src/index.js", import.meta.url));
 
+assert.equal(
+  worker.telegramWebhookUrl({ TASKS_APP_URL: "https://example.com/tasks/?draft=1" }),
+  "https://example.com/",
+);
+
 const assets = Array.from({ length: 10 }, (_, index) => ({
   name: `asset-${index + 1}.zip`,
   updated_at: "2026-08-16T07:11:13Z",
