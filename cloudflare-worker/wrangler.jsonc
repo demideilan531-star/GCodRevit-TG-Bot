@@ -3,6 +3,7 @@
   "name": "gcodrevit-telegram-bot",
   "main": "src/index.js",
   "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "keep_vars": true,
   "assets": {

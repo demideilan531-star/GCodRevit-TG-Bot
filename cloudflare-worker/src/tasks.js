@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 const BUTTON_TASK_CREATE = "➕ Задача";
 const BUTTON_TASKS = "📅 Задачи";
 
@@ -183,21 +185,13 @@ export async function transcribeAudioBuffer(env, buffer) {
   }
 
   const model = env.TASKS_SPEECH_MODEL || "@cf/openai/whisper-large-v3-turbo";
-  let result;
-  try {
-    result = await env.AI.run(model, {
-      audio: buffer,
-      task: "transcribe",
-      language: "ru",
-      vad_filter: true,
-      initial_prompt: "Задача, работа, учёба, GCodRevit, Revit, Navisworks, BIM, дедлайн.",
-    });
-  } catch (error) {
-    if (!isSpeechInputSchemaError(error)) throw error;
-    console.warn("Speech model rejected structured binary input; retrying with raw audio", error);
-    result = await env.AI.run(model, buffer);
-  }
-
+  const result = await env.AI.run(model, {
+    audio: Buffer.from(buffer).toString("base64"),
+    task: "transcribe",
+    language: "ru",
+    vad_filter: false,
+    initial_prompt: "Задача, работа, учёба, GCodRevit, Revit, Navisworks, BIM, дедлайн.",
+  });
   const text = cleanText(result?.text || result?.transcription_info?.text, 3000);
   if (!text) throw new Error("Не удалось распознать речь в голосовом сообщении.");
   return text;
