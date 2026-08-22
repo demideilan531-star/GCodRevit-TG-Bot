@@ -17,6 +17,7 @@ const DEFAULT_TIMEZONE = "Europe/Moscow";
 const DEFAULT_APP_URL = "https://gcodrevit-telegram-bot.demideilan531.workers.dev/tasks/";
 const MAX_BODY_BYTES = 12 * 1024;
 const MAX_VOICE_BYTES = 5 * 1024 * 1024;
+const MAX_SUBTASKS = 20;
 
 function tasksDb(env) {
   if (!env.TASKS_DB) {
@@ -39,21 +40,73 @@ function cleanText(value, maxLength) {
     .slice(0, maxLength);
 }
 
-function normalizeFlags(value, sourceText = "") {
+function explicitlyRequestsUrgent(sourceText) {
+  const text = String(sourceText || "");
+  if (/(?:не|без)\s+(?:нужно\s+|надо\s+|ставь\s+|добавляй\s+)?срочн/i.test(text)) {
+    return false;
+  }
+  return /(срочн|немедленно|флаж\w*\s+[«"']?срочн|помет\w*\s+как\s+срочн)/i.test(text);
+}
+
+function normalizeFlags(value, sourceText = "", { allowUrgent = false } = {}) {
   const flags = Array.isArray(value) ? value : [];
-  const normalized = [...new Set(flags.map(String).filter((flag) => TASK_FLAG_IDS.has(flag)))];
+  const urgentRequested = explicitlyRequestsUrgent(sourceText);
+  const urgentSelected = allowUrgent && flags.map(String).includes("urgent");
+  const includeUrgent = urgentRequested || urgentSelected;
+  const normalized = [
+    ...new Set(
+      flags
+        .map(String)
+        .filter((flag) => TASK_FLAG_IDS.has(flag) && (flag !== "urgent" || includeUrgent)),
+    ),
+  ];
   const lower = sourceText.toLowerCase();
   const fallbacks = [
-    ["urgent", /(срочн|важн|немедленно)/i],
     ["study", /(уч[её]б|универ|курс|экзамен|лекци)/i],
     ["gcod", /(gcod|revit|navisworks|bim)/i],
-    ["work", /(работ|проект|заказчик|коллег)/i],
+    ["work", /(работ|проект|заказчик|коллег|фасад|витраж|черт[её]ж|модел|материал)/i],
   ];
   for (const [flag, pattern] of fallbacks) {
     if (pattern.test(lower) && !normalized.includes(flag)) normalized.push(flag);
   }
+  if (urgentRequested && !normalized.includes("urgent")) normalized.push("urgent");
   if (!normalized.some((flag) => flag !== "urgent")) normalized.push("personal");
   return normalized.slice(0, TASK_FLAGS.length);
+}
+
+function fallbackSubtasks(sourceText) {
+  const actions = cleanText(sourceText, 3000)
+    .split(
+      /\s*(?:[,;]|\n|\.\s+)\s*|\s+и\s+(?=(?:создать|сделать|улучшить|разделить|проверить|подготовить|купить|отправить|добавить|исправить|обновить|настроить|протестировать|разработать)\b)/iu,
+    )
+    .map((item) => cleanText(item.replace(/[.!?]+$/g, ""), 240))
+    .filter(Boolean);
+  if (actions.length < 2) return [];
+  return actions.slice(0, MAX_SUBTASKS).map((title) => ({
+    id: crypto.randomUUID(),
+    title,
+    done: false,
+  }));
+}
+
+export function normalizeSubtasks(value) {
+  if (!Array.isArray(value)) return [];
+  const result = [];
+  const seen = new Set();
+  for (const item of value) {
+    const candidate = item && typeof item === "object" ? item : { title: item };
+    const title = cleanText(candidate.title, 240);
+    const key = title.toLocaleLowerCase("ru-RU");
+    if (!title || seen.has(key)) continue;
+    seen.add(key);
+    result.push({
+      id: cleanText(candidate.id, 80) || crypto.randomUUID(),
+      title,
+      done: candidate.done === true,
+    });
+    if (result.length >= MAX_SUBTASKS) break;
+  }
+  return result;
 }
 
 function normalizeDueAt(value) {
@@ -68,9 +121,11 @@ function normalizeDueAt(value) {
 export function fallbackTaskDraft(sourceText) {
   const text = cleanText(sourceText, 3000);
   const firstSentence = text.split(/[.!?\n]/)[0] || text;
+  const subtasks = fallbackSubtasks(text);
   return {
     title: cleanText(firstSentence, 96) || "Новая задача",
-    description: text,
+    description: subtasks.length ? "" : text,
+    subtasks,
     due_at: null,
     flags: normalizeFlags([], text),
   };
@@ -79,9 +134,16 @@ export function fallbackTaskDraft(sourceText) {
 export function normalizeTaskDraft(value, sourceText) {
   const fallback = fallbackTaskDraft(sourceText);
   const candidate = value && typeof value === "object" ? value : {};
+  const subtasks = normalizeSubtasks(
+    Array.isArray(candidate.subtasks) && candidate.subtasks.length
+      ? candidate.subtasks
+      : fallback.subtasks,
+  );
+  const candidateDescription = cleanText(candidate.description, 2000);
   return {
     title: cleanText(candidate.title, 120) || fallback.title,
-    description: cleanText(candidate.description, 2000) || fallback.description,
+    description: candidateDescription || (subtasks.length ? "" : fallback.description),
+    subtasks,
     due_at: normalizeDueAt(candidate.due_at),
     flags: normalizeFlags(candidate.flags, sourceText),
   };
@@ -116,6 +178,11 @@ export async function parseTaskText(env, sourceText) {
     properties: {
       title: { type: "string", maxLength: 120 },
       description: { type: "string", maxLength: 2000 },
+      subtasks: {
+        type: "array",
+        items: { type: "string", maxLength: 240 },
+        maxItems: MAX_SUBTASKS,
+      },
       due_at: { type: ["string", "null"] },
       flags: {
         type: "array",
@@ -123,7 +190,7 @@ export async function parseTaskText(env, sourceText) {
         maxItems: TASK_FLAGS.length,
       },
     },
-    required: ["title", "description", "due_at", "flags"],
+    required: ["title", "description", "subtasks", "due_at", "flags"],
     additionalProperties: false,
   };
 
@@ -136,11 +203,16 @@ export async function parseTaskText(env, sourceText) {
             role: "system",
             content: [
               "Ты превращаешь русскоязычный запрос в задачу.",
-              "Выдели короткое конкретное название и сохрани важные детали в описании.",
+              "Сформулируй короткое обобщающее название основной задачи.",
+              "Если запрос содержит несколько самостоятельных действий, вынеси каждое действие в subtasks отдельной короткой строкой в повелительной форме.",
+              "Не объединяй несколько действий в одну подзадачу и не дублируй их в description.",
+              "Если действие только одно, верни пустой массив subtasks и сохрани детали в description.",
               `Текущее время: ${currentMoscowTime()}. Часовой пояс: ${DEFAULT_TIMEZONE}.`,
               "Если срок относительный, вычисли его. Если время не названо, используй 18:00.",
               "Верни due_at в ISO 8601 с часовым поясом или null, если срока действительно нет.",
               "Допустимые флажки: work, study, gcod, personal, urgent. Можно выбрать несколько.",
+              "Флажок urgent ставь только если пользователь прямо написал, что задача срочная, требует немедленного выполнения или попросил этот флажок.",
+              "Слова о важности задачи сами по себе не означают urgent.",
               "Не придумывай факты, исполнителей и сроки, которых нет в запросе.",
             ].join(" "),
           },
@@ -217,19 +289,26 @@ function taskSubmissionErrorMessage(error) {
 function serializeTask(row) {
   if (!row) return null;
   let flags = [];
+  let subtasks = [];
   try {
     flags = JSON.parse(row.flags_json || "[]");
   } catch {
     flags = [];
   }
+  try {
+    subtasks = JSON.parse(row.subtasks_json || "[]");
+  } catch {
+    subtasks = [];
+  }
   return {
     id: row.id,
     title: row.title,
     description: row.description || "",
+    subtasks: normalizeSubtasks(subtasks),
     due_at: row.due_at || null,
     timezone: row.timezone || DEFAULT_TIMEZONE,
     status: row.status,
-    flags: normalizeFlags(flags),
+    flags: normalizeFlags(flags, "", { allowUrgent: true }),
     source_type: row.source_type,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -244,15 +323,16 @@ async function insertTask(env, ownerId, draft, sourceType, sourceText, status = 
   await db
     .prepare(
       `INSERT INTO tasks
-        (id, owner_id, title, description, due_at, timezone, status, flags_json,
+        (id, owner_id, title, description, subtasks_json, due_at, timezone, status, flags_json,
          source_type, source_text, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
       String(ownerId),
       draft.title,
       draft.description,
+      JSON.stringify(normalizeSubtasks(draft.subtasks)),
       draft.due_at,
       DEFAULT_TIMEZONE,
       status,
@@ -281,15 +361,17 @@ function formatFlags(flags) {
 }
 
 function taskPreview(task, transcript = "") {
-  const lines = [
-    "Проверь задачу",
+  const lines = ["Проверь задачу", "", "Название:", task.title];
+  if (task.subtasks?.length) {
+    lines.push("", "Задачи:", ...task.subtasks.map((subtask) => `- ${subtask.title}`));
+  } else if (task.description) {
+    lines.push("", "Описание:", task.description);
+  }
+  lines.push(
     "",
-    task.title,
-    task.description,
-    "",
-    `Срок: ${formatDueAt(task.due_at)}`,
+    `Дедлайн: ${task.due_at ? formatDueAt(task.due_at) : "Не указан"}`,
     `Флажки: ${formatFlags(task.flags)}`,
-  ];
+  );
   if (transcript) lines.push("", `Распознано: ${cleanText(transcript, 500)}`);
   return lines.join("\n").slice(0, 3900);
 }
@@ -524,12 +606,15 @@ export function validateTaskPayload(value, { partial = false } = {}) {
   if (!partial || Object.hasOwn(body, "description")) {
     result.description = cleanText(body.description, 2000);
   }
+  if (!partial || Object.hasOwn(body, "subtasks")) {
+    result.subtasks = normalizeSubtasks(body.subtasks);
+  }
   if (!partial || Object.hasOwn(body, "due_at")) {
     result.due_at = normalizeDueAt(body.due_at);
     if (body.due_at && !result.due_at) throw new Error("Некорректный срок задачи.");
   }
   if (!partial || Object.hasOwn(body, "flags")) {
-    result.flags = normalizeFlags(body.flags);
+    result.flags = normalizeFlags(body.flags, "", { allowUrgent: true });
   }
   if (Object.hasOwn(body, "status")) {
     const status = String(body.status);
@@ -572,6 +657,9 @@ async function updateTaskFromApi(env, ownerId, taskId, body) {
   for (const [field, value] of Object.entries(changes)) {
     if (field === "flags") {
       assignments.push("flags_json = ?");
+      values.push(JSON.stringify(value));
+    } else if (field === "subtasks") {
+      assignments.push("subtasks_json = ?");
       values.push(JSON.stringify(value));
     } else {
       assignments.push(`${field} = ?`);

@@ -44,22 +44,75 @@ async function signedInitData(botToken, user, authDate = Math.floor(Date.now() /
 test("fallback parser keeps text and infers predefined flags", () => {
   const draft = fallbackTaskDraft("Срочно подготовить модель Revit для проекта.");
   assert.equal(draft.title, "Срочно подготовить модель Revit для проекта");
-  assert.deepEqual(draft.flags, ["urgent", "gcod", "work"]);
+  assert.deepEqual(draft.flags, ["gcod", "work", "urgent"]);
+  assert.deepEqual(draft.subtasks, []);
 });
 
-test("AI result is normalized and unknown flags are removed", () => {
+test("AI result is normalized, split into subtasks, and unknown flags are removed", () => {
   const draft = normalizeTaskDraft(
     {
       title: "  Подготовить отчёт  ",
-      description: "Передать заказчику",
+      description: "",
+      subtasks: ["Собрать данные", "Передать заказчику", "Собрать данные"],
       due_at: "2026-08-25T15:00:00+03:00",
       flags: ["work", "unknown", "urgent", "work"],
     },
     "Подготовить отчёт",
   );
   assert.equal(draft.title, "Подготовить отчёт");
+  assert.equal(draft.description, "");
+  assert.deepEqual(draft.subtasks.map(({ title, done }) => ({ title, done })), [
+    { title: "Собрать данные", done: false },
+    { title: "Передать заказчику", done: false },
+  ]);
   assert.equal(draft.due_at, "2026-08-25T12:00:00.000Z");
-  assert.deepEqual(draft.flags, ["work", "urgent"]);
+  assert.deepEqual(draft.flags, ["work"]);
+});
+
+test("compound facade request becomes independent subtasks", () => {
+  const draft = normalizeTaskDraft(
+    {
+      title: "Работа с фасадами",
+      description: "",
+      subtasks: [
+        "Создать фасады",
+        "Улучшить материалы фасадов",
+        "Разделить витражи на несколько частей",
+        "Сделать новый набор стики",
+      ],
+      due_at: null,
+      flags: ["work", "urgent"],
+    },
+    "Создать фасады, улучшить материалы фасадов, разделить витражи на несколько частей и сделать новый набор стики.",
+  );
+
+  assert.equal(draft.title, "Работа с фасадами");
+  assert.deepEqual(draft.subtasks.map((subtask) => subtask.title), [
+    "Создать фасады",
+    "Улучшить материалы фасадов",
+    "Разделить витражи на несколько частей",
+    "Сделать новый набор стики",
+  ]);
+  assert.deepEqual(draft.flags, ["work"]);
+});
+
+test("urgent flag requires an explicit request", () => {
+  const important = normalizeTaskDraft(
+    { title: "Проверить важный отчёт", description: "", subtasks: [], flags: ["work", "urgent"] },
+    "Проверить важный отчёт",
+  );
+  const urgent = normalizeTaskDraft(
+    { title: "Проверить отчёт", description: "", subtasks: [], flags: ["work"] },
+    "Срочно проверить отчёт",
+  );
+  const notUrgent = normalizeTaskDraft(
+    { title: "Проверить отчёт", description: "", subtasks: [], flags: ["work", "urgent"] },
+    "Проверить отчёт, не срочно",
+  );
+
+  assert.deepEqual(important.flags, ["work"]);
+  assert.deepEqual(urgent.flags, ["work", "urgent"]);
+  assert.deepEqual(notUrgent.flags, ["work"]);
 });
 
 test("Mini App URL can target a draft", () => {
@@ -99,9 +152,20 @@ test("task API payload validates required fields and partial updates", () => {
   assert.deepEqual(validateTaskPayload({ title: "Позвонить", flags: ["personal"] }), {
     title: "Позвонить",
     description: "",
+    subtasks: [],
     due_at: null,
     flags: ["personal"],
   });
+  const compound = validateTaskPayload({
+    title: "Работа с фасадами",
+    subtasks: ["Создать фасады", { title: "Улучшить материалы", done: true }],
+    flags: ["work", "urgent"],
+  });
+  assert.deepEqual(compound.subtasks.map(({ title, done }) => ({ title, done })), [
+    { title: "Создать фасады", done: false },
+    { title: "Улучшить материалы", done: true },
+  ]);
+  assert.deepEqual(compound.flags, ["work", "urgent"]);
   assert.deepEqual(validateTaskPayload({ status: "done" }, { partial: true }), {
     status: "done",
   });

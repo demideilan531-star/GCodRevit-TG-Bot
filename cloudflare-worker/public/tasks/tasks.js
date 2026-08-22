@@ -45,7 +45,8 @@ const elements = Object.fromEntries(
     "nextMonth", "currentMonth", "calendarGrid", "selectedDayHeading", "selectedDayTasks",
     "taskDialog", "taskForm", "dialogTitle", "closeDialog", "cancelTaskButton",
     "deleteTaskButton", "taskId", "taskTitle", "taskDescription", "taskDueAt",
-    "taskStatus", "statusField", "flagOptions", "loadingOverlay", "toast",
+    "taskStatus", "statusField", "flagOptions", "subtaskEditor", "addSubtaskButton",
+    "loadingOverlay", "toast",
   ].map((id) => [id, document.getElementById(id)]),
 );
 
@@ -72,10 +73,10 @@ function demoTasks() {
       { id: "urgent", label: "Срочно" },
     ],
     tasks: [
-      { id: "demo-1", title: "Проверить новый релиз GCod", description: "Проверить установщик и описание версии.", due_at: isoAt(today, 18), status: "todo", flags: ["gcod", "urgent"] },
-      { id: "demo-2", title: "Отправить модель заказчику", description: "Выгрузить NWC после координации.", due_at: isoAt(tomorrow, 12), status: "in_progress", flags: ["work"] },
-      { id: "demo-3", title: "Посмотреть лекцию", description: "Закрыть второй модуль курса.", due_at: isoAt(nextWeek, 19), status: "todo", flags: ["study"] },
-      { id: "demo-4", title: "Купить продукты", description: "", due_at: null, status: "done", flags: ["personal"] },
+      { id: "demo-1", title: "Проверить новый релиз GCod", description: "", subtasks: [{ id: "s1", title: "Проверить установщик", done: true }, { id: "s2", title: "Проверить описание версии", done: false }], due_at: isoAt(today, 18), status: "todo", flags: ["gcod", "urgent"] },
+      { id: "demo-2", title: "Отправить модель заказчику", description: "Выгрузить NWC после координации.", subtasks: [], due_at: isoAt(tomorrow, 12), status: "in_progress", flags: ["work"] },
+      { id: "demo-3", title: "Посмотреть лекцию", description: "Закрыть второй модуль курса.", subtasks: [], due_at: isoAt(nextWeek, 19), status: "todo", flags: ["study"] },
+      { id: "demo-4", title: "Купить продукты", description: "", subtasks: [], due_at: null, status: "done", flags: ["personal"] },
     ],
   };
 }
@@ -174,6 +175,13 @@ function taskRow(task) {
   due.className = `due-label${isOverdue(task) ? " overdue" : ""}`;
   due.textContent = task.due_at ? dateTimeLabel.format(new Date(task.due_at)) : "Без срока";
   meta.append(due);
+  if (task.subtasks?.length) {
+    const completed = task.subtasks.filter((subtask) => subtask.done).length;
+    const progress = document.createElement("span");
+    progress.className = "subtask-progress";
+    progress.textContent = `${completed}/${task.subtasks.length} подзадач`;
+    meta.append(progress);
+  }
   main.append(meta);
 
   const flags = document.createElement("div");
@@ -378,11 +386,56 @@ function localInputValue(iso) {
   return parts.replace(" ", "T");
 }
 
+function subtaskEditorRow(subtask = {}) {
+  const row = document.createElement("div");
+  row.className = "subtask-edit-row";
+  row.dataset.id = subtask.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+
+  const done = document.createElement("input");
+  done.type = "checkbox";
+  done.className = "subtask-check";
+  done.checked = subtask.done === true;
+  done.setAttribute("aria-label", "Подзадача выполнена");
+
+  const title = document.createElement("input");
+  title.type = "text";
+  title.className = "subtask-title-input";
+  title.maxLength = 240;
+  title.value = subtask.title || "";
+  title.placeholder = "Что нужно сделать";
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "subtask-remove";
+  remove.textContent = "×";
+  remove.title = "Удалить подзадачу";
+  remove.setAttribute("aria-label", "Удалить подзадачу");
+  remove.addEventListener("click", () => row.remove());
+
+  row.append(done, title, remove);
+  return row;
+}
+
+function renderSubtaskEditor(subtasks = []) {
+  elements.subtaskEditor.replaceChildren(...subtasks.map(subtaskEditorRow));
+}
+
+function subtaskPayload() {
+  return [...elements.subtaskEditor.querySelectorAll(".subtask-edit-row")]
+    .map((row) => ({
+      id: row.dataset.id,
+      title: row.querySelector(".subtask-title-input").value.trim(),
+      done: row.querySelector(".subtask-check").checked,
+    }))
+    .filter((subtask) => subtask.title);
+}
+
 function openTaskDialog(task = null) {
   elements.taskForm.reset();
   elements.taskId.value = task?.id || "";
   elements.taskTitle.value = task?.title || "";
   elements.taskDescription.value = task?.description || "";
+  renderSubtaskEditor(task?.subtasks || []);
   elements.taskDueAt.value = localInputValue(task?.due_at);
   elements.taskStatus.value = task?.status === "draft" ? "todo" : task?.status || "todo";
   elements.dialogTitle.textContent = task ? "Изменить задачу" : "Новая задача";
@@ -405,6 +458,7 @@ function formPayload() {
   return {
     title: elements.taskTitle.value,
     description: elements.taskDescription.value,
+    subtasks: subtaskPayload(),
     due_at: due ? new Date(`${due}:00+03:00`).toISOString() : null,
     flags: [...document.querySelectorAll('input[name="flags"]:checked')].map((input) => input.value),
     ...(elements.taskId.value && task?.status !== "draft"
@@ -489,6 +543,11 @@ function bindEvents() {
   elements.closeDialog.addEventListener("click", closeTaskDialog);
   elements.cancelTaskButton.addEventListener("click", closeTaskDialog);
   elements.deleteTaskButton.addEventListener("click", deleteTask);
+  elements.addSubtaskButton.addEventListener("click", () => {
+    const row = subtaskEditorRow();
+    elements.subtaskEditor.append(row);
+    row.querySelector(".subtask-title-input").focus();
+  });
   elements.taskForm.addEventListener("submit", saveTask);
   elements.flagFilter.addEventListener("change", () => {
     state.flagFilter = elements.flagFilter.value;

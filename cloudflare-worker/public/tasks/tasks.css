@@ -319,6 +319,12 @@ textarea {
   font-size: 12px;
 }
 
+.subtask-progress {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .due-label.overdue {
   color: var(--danger);
   font-weight: 700;
@@ -488,7 +494,8 @@ dialog::backdrop {
 }
 
 .field > span,
-.flag-fieldset legend {
+.flag-fieldset legend,
+.subtask-heading > span {
   display: block;
   margin-bottom: 6px;
   color: var(--muted);
@@ -500,6 +507,70 @@ dialog::backdrop {
   margin: 0 0 18px;
   padding: 0;
   border: 0;
+}
+
+.subtask-fieldset {
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.subtask-heading {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subtask-heading > span {
+  margin: 0;
+}
+
+.subtask-add {
+  margin: 0;
+}
+
+.subtask-editor {
+  display: grid;
+  gap: 7px;
+}
+
+.subtask-edit-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.subtask-check {
+  width: 20px;
+  min-height: 20px;
+  height: 20px;
+  accent-color: var(--green);
+}
+
+.subtask-title-input {
+  min-width: 0;
+}
+
+.subtask-check:checked + .subtask-title-input {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.subtask-remove {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--danger);
+  font-size: 22px;
+  line-height: 1;
 }
 
 .flag-options {

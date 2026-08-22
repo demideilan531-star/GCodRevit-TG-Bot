@@ -88,6 +88,14 @@
           <span>Описание</span>
           <textarea id="taskDescription" name="description" maxlength="2000" rows="4"></textarea>
         </label>
+        <fieldset class="subtask-fieldset">
+          <legend class="visually-hidden">Подзадачи</legend>
+          <div class="subtask-heading">
+            <span>Подзадачи</span>
+            <button class="text-button subtask-add" id="addSubtaskButton" type="button">+ Добавить</button>
+          </div>
+          <div class="subtask-editor" id="subtaskEditor"></div>
+        </fieldset>
         <label class="field">
           <span>Срок</span>
           <input id="taskDueAt" name="due_at" type="datetime-local" />
