@@ -171,27 +171,53 @@ async function telegramFile(env, fileId, telegramApi) {
   return buffer;
 }
 
-export async function transcribeVoice(env, message, telegramApi) {
+function isSpeechInputSchemaError(error) {
+  const message = String(error?.message || error || "");
+  return /(?:5006|required properties|type mismatch)/i.test(message) && /audio/i.test(message);
+}
+
+export async function transcribeAudioBuffer(env, buffer) {
   if (!env.AI) throw new Error("Workers AI ещё не подключён к боту.");
+  if (!(buffer instanceof ArrayBuffer)) {
+    throw new TypeError("Аудиозапись должна быть передана в бинарном формате.");
+  }
+
+  const model = env.TASKS_SPEECH_MODEL || "@cf/openai/whisper-large-v3-turbo";
+  let result;
+  try {
+    result = await env.AI.run(model, {
+      audio: buffer,
+      task: "transcribe",
+      language: "ru",
+      vad_filter: true,
+      initial_prompt: "Задача, работа, учёба, GCodRevit, Revit, Navisworks, BIM, дедлайн.",
+    });
+  } catch (error) {
+    if (!isSpeechInputSchemaError(error)) throw error;
+    console.warn("Speech model rejected structured binary input; retrying with raw audio", error);
+    result = await env.AI.run(model, buffer);
+  }
+
+  const text = cleanText(result?.text || result?.transcription_info?.text, 3000);
+  if (!text) throw new Error("Не удалось распознать речь в голосовом сообщении.");
+  return text;
+}
+
+export async function transcribeVoice(env, message, telegramApi) {
   const voice = message.voice || message.audio;
   if (!voice?.file_id) throw new Error("В сообщении нет голосового файла.");
   if (Number(voice.file_size || 0) > MAX_VOICE_BYTES) {
     throw new Error("Голосовое сообщение слишком большое. Максимум 5 МБ.");
   }
   const buffer = await telegramFile(env, voice.file_id, telegramApi);
-  const result = await env.AI.run(
-    env.TASKS_SPEECH_MODEL || "@cf/openai/whisper-large-v3-turbo",
-    {
-      audio: Array.from(new Uint8Array(buffer)),
-      task: "transcribe",
-      language: "ru",
-      vad_filter: true,
-      initial_prompt: "Задача, работа, учёба, GCodRevit, Revit, Navisworks, BIM, дедлайн.",
-    },
-  );
-  const text = cleanText(result?.text || result?.transcription_info?.text, 3000);
-  if (!text) throw new Error("Не удалось распознать речь в голосовом сообщении.");
-  return text;
+  return transcribeAudioBuffer(env, buffer);
+}
+
+function taskSubmissionErrorMessage(error) {
+  if (isSpeechInputSchemaError(error)) {
+    return "Не удалось распознать голосовое. Повтори запись или отправь задачу текстом.";
+  }
+  return cleanText(error?.message || "Неизвестная ошибка", 500);
 }
 
 function serializeTask(row) {
@@ -303,7 +329,7 @@ async function processTaskSubmission(env, chatId, ownerId, message, telegramApi)
     console.error("Task submission failed", error);
     await telegramApi(env, "sendMessage", {
       chat_id: chatId,
-      text: `Не удалось разобрать задачу: ${error.message}`,
+      text: `Не удалось разобрать задачу: ${taskSubmissionErrorMessage(error)}`,
     });
   }
 }

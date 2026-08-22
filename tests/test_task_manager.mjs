@@ -6,6 +6,7 @@ import {
   normalizeTaskDraft,
   shouldCreateTaskFromMessage,
   taskAppUrl,
+  transcribeAudioBuffer,
   validateTaskPayload,
   validateTelegramInitData,
 } from "../cloudflare-worker/src/tasks.js";
@@ -74,6 +75,47 @@ test("ordinary text and voice are tasks without a keyboard mode", () => {
   assert.equal(shouldCreateTaskFromMessage({ text: "🌤 Погода" }, reserved), false);
   assert.equal(shouldCreateTaskFromMessage({ text: "/start" }, reserved), false);
   assert.equal(shouldCreateTaskFromMessage({ text: "/unknown" }, reserved), false);
+});
+
+test("voice transcription sends audio as binary data", async () => {
+  const audio = new Uint8Array([79, 103, 103, 83]).buffer;
+  let receivedInput;
+  const env = {
+    AI: {
+      run: async (_model, input) => {
+        receivedInput = input;
+        return { text: "Купить продукты" };
+      },
+    },
+  };
+
+  assert.equal(await transcribeAudioBuffer(env, audio), "Купить продукты");
+  assert.ok(receivedInput.audio instanceof ArrayBuffer);
+  assert.strictEqual(receivedInput.audio, audio);
+  assert.equal(typeof receivedInput.audio, "object");
+});
+
+test("voice transcription retries with a raw binary body after a schema error", async () => {
+  const audio = new Uint8Array([79, 103, 103, 83]).buffer;
+  const calls = [];
+  const env = {
+    AI: {
+      run: async (_model, input) => {
+        calls.push(input);
+        if (calls.length === 1) {
+          throw new Error(
+            "5006: required properties at '/' are 'audio'; Type mismatch of '/audio', 'string' not in 'array','binary'",
+          );
+        }
+        return { text: "Подготовить отчёт" };
+      },
+    },
+  };
+
+  assert.equal(await transcribeAudioBuffer(env, audio), "Подготовить отчёт");
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].audio instanceof ArrayBuffer);
+  assert.strictEqual(calls[1], audio);
 });
 
 test("task API payload validates required fields and partial updates", () => {
