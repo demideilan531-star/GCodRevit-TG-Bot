@@ -119,7 +119,7 @@ def tomorrow_forecast(page):
     return f"{condition} · {low:+d}…{high:+d}° · ветер {wind_speed} м/с"
 
 
-def extended_forecast(page):
+def extended_forecast(page, fallback=None):
     periods = (
         ("НА СЛЕДУЮЩЕЙ НЕДЕЛЕ", "На следующей неделе", "следующую неделю"),
         ("НА ЭТОЙ НЕДЕЛЕ", "На неделе", "неделю"),
@@ -158,6 +158,10 @@ def extended_forecast(page):
     if today:
         return "СЕГОДНЯ", "Сегодня", normalize_text(today.group(1))
 
+    fallback_text = normalize_text(fallback)
+    if fallback_text:
+        return "СЕГОДНЯ", "Сегодня", fallback_text
+
     raise RuntimeError("Не удалось найти дополнительный прогноз на странице Яндекс Погоды")
 
 
@@ -193,7 +197,10 @@ def parse_weather(page):
     summary = normalize_text(summary_match.group(1)).rstrip(",") if summary_match else condition
 
     tomorrow = tomorrow_forecast(page)
-    extended_image_label, extended_caption_label, extended = extended_forecast(page)
+    extended_image_label, extended_caption_label, extended = extended_forecast(
+        page,
+        summary,
+    )
 
     hourly = []
     for item in re.findall(

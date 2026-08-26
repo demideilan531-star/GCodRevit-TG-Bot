@@ -56,6 +56,19 @@ class WeatherReportTests(unittest.TestCase):
             ),
         )
 
+    def test_extended_forecast_uses_current_summary_when_optional_block_is_missing(self):
+        self.assertEqual(
+            weather_report.extended_forecast(
+                "<html><body>Нет недельного блока</body></html>",
+                "Сегодня без существенных осадков",
+            ),
+            (
+                "СЕГОДНЯ",
+                "Сегодня",
+                "Сегодня без существенных осадков",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
