@@ -8,8 +8,19 @@ import {
   handleBusinessUpdate,
   handleContextApi,
 } from "./chat-context.js";
+import {
+  allowAssistantUser,
+  blockAssistantUser,
+  getAssistantAccess,
+  listAssistantUsers,
+} from "./access.js";
+import {
+  handleGmailBrokerApi,
+  handlePersonalGmailUpdate,
+} from "./personal-gmail.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
+const BUTTON_PERSONAL_GMAIL = "📬 Моя почта";
 const BUTTON_GITHUB = "🧩 GitHub";
 const BUTTON_VIDEO = "🎬 Видео GCodRevit";
 const BUTTON_WEATHER = "🌤 Погода";
@@ -118,7 +129,15 @@ const RELEASE_FEATURES = [
   },
 ];
 
-function keyboard() {
+function keyboard(role = "admin") {
+  if (role !== "admin") {
+    return {
+      keyboard: [[{ text: BUTTON_PERSONAL_GMAIL }, { text: BUTTON_WEATHER }]],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+      is_persistent: true,
+    };
+  }
   return {
     keyboard: [
       [{ text: BUTTON_GMAIL }, { text: BUTTON_GITHUB }],
@@ -128,15 +147,6 @@ function keyboard() {
     one_time_keyboard: false,
     is_persistent: true,
   };
-}
-
-function adminIds(env) {
-  return new Set(
-    (env.TELEGRAM_ADMIN_IDS || "1839693017")
-      .split(/[\s,;]+/)
-      .filter(Boolean)
-      .map(Number),
-  );
 }
 
 async function telegramApi(env, method, payload) {
@@ -688,10 +698,10 @@ async function claimGithubCooldown(userId) {
   return { cache, key };
 }
 
-function sendMessage(env, chatId, text, withKeyboard = true) {
+function sendMessage(env, chatId, text, withKeyboard = true, role = "admin") {
   const payload = { chat_id: chatId, text };
   if (withKeyboard) {
-    payload.reply_markup = keyboard();
+    payload.reply_markup = keyboard(role);
   }
   return telegramApi(env, "sendMessage", payload);
 }
@@ -722,6 +732,11 @@ function configureTelegramWebhook(env) {
 async function dispatchGmailWorkflow(env, chatId) {
   const workflow = env.GMAIL_WORKFLOW_ID || "hourly-gmail-telegram.yml";
   return dispatchWorkflow(env, workflow, { notify_chat_id: String(chatId) });
+}
+
+async function dispatchPersonalGmailWorkflow(env, requestId) {
+  const workflow = env.PERSONAL_GMAIL_WORKFLOW_ID || "personal-gmail.yml";
+  return dispatchWorkflow(env, workflow, { request_id: String(requestId) });
 }
 
 async function dispatchWeatherWorkflow(env, chatId) {
@@ -768,30 +783,90 @@ async function handleUpdate(update, env, ctx) {
   }
 
   const userId = Number(actor.id);
+  const access = await getAssistantAccess(env, actor);
 
-  if (!adminIds(env).has(userId)) {
+  if (!access) {
     if (update.callback_query?.id) {
       await telegramApi(env, "answerCallbackQuery", {
         callback_query_id: update.callback_query.id,
-        text: "У тебя нет доступа к задачам.",
+        text: "У тебя нет доступа к этому боту.",
         show_alert: true,
       });
     } else {
-      await sendMessage(env, chatId, "У тебя нет доступа к запуску публикаций.", false);
+      await sendMessage(env, chatId, "Доступ не настроен. Попроси администратора добавить твой @username.", false);
     }
     return;
   }
 
+  if (access.role !== "admin" && message?.chat?.type !== "private") {
+    await sendMessage(env, chatId, "Личный ассистент работает только в личном чате с ботом.", false);
+    return;
+  }
+
+  const sendForAccess = (innerEnv, innerChatId, innerText, withKeyboard = true) =>
+    sendMessage(innerEnv, innerChatId, innerText, withKeyboard, access.role);
+
+  if (access.role === "admin" && message?.text) {
+    const command = String(message.text).trim();
+    const allowMatch = command.match(/^\/allow(?:@\w+)?\s+(@?[a-z0-9_]{5,32})$/i);
+    const blockMatch = command.match(/^\/block(?:@\w+)?\s+(@?[a-z0-9_]{5,32})$/i);
+    try {
+      if (allowMatch) {
+        const username = await allowAssistantUser(env, allowMatch[1]);
+        await sendForAccess(
+          env,
+          chatId,
+          `@${username} добавлен. Пользователь должен открыть бота и отправить /start.`,
+        );
+        return;
+      }
+      if (blockMatch) {
+        const username = await blockAssistantUser(env, blockMatch[1]);
+        await sendForAccess(env, chatId, `Доступ @${username} заблокирован.`);
+        return;
+      }
+      if (/^\/users(?:@\w+)?$/i.test(command)) {
+        const users = await listAssistantUsers(env);
+        const lines = users.length
+          ? users.map(
+              (user) =>
+                `@${user.username}: ${user.status}${user.telegram_user_id ? `, ID ${user.telegram_user_id}` : ""}`,
+            )
+          : ["Разрешённых пользователей пока нет."];
+        await sendForAccess(env, chatId, lines.join("\n"));
+        return;
+      }
+    } catch (error) {
+      await sendForAccess(env, chatId, error.message);
+      return;
+    }
+  }
+
   if (
+    access.role !== "admin" &&
+    access.canGmail &&
+    (await handlePersonalGmailUpdate(update, env, ctx, {
+      buttonText: BUTTON_PERSONAL_GMAIL,
+      dispatchWorkflow: (requestId) => dispatchPersonalGmailWorkflow(env, requestId),
+      sendMessage: sendForAccess,
+      telegramApi,
+    }))
+  ) {
+    return;
+  }
+
+  if (
+    access.canTasks &&
     await handleTaskUpdate(update, env, ctx, {
       telegramApi,
-      sendMessage,
+      sendMessage: sendForAccess,
       reservedTexts: new Set([
         "/start",
         "/menu",
         "➕ Задача",
         "📅 Задачи",
         BUTTON_GMAIL,
+        BUTTON_PERSONAL_GMAIL,
         BUTTON_GITHUB,
         BUTTON_VIDEO,
         BUTTON_WEATHER,
@@ -819,11 +894,13 @@ async function handleUpdate(update, env, ctx) {
       env,
       chatId,
       "Напиши задачу текстом или голосом. Календарь открывается кнопкой Open App в профиле бота.",
+      true,
+      access.role,
     );
     return;
   }
 
-  if (video) {
+  if (video && access.role === "admin") {
     const maxDownloadSize = 20 * 1024 * 1024;
     if (Number(video.file_size || 0) > maxDownloadSize) {
       await sendMessage(
@@ -843,7 +920,7 @@ async function handleUpdate(update, env, ctx) {
     return;
   }
 
-  if (text === BUTTON_GMAIL) {
+  if (text === BUTTON_GMAIL && access.role === "admin") {
     await sendMessage(env, chatId, "Отправлен запрос на отчёт.");
     ctx.waitUntil(
       dispatchGmailWorkflow(env, chatId).catch((error) =>
@@ -853,7 +930,7 @@ async function handleUpdate(update, env, ctx) {
     return;
   }
 
-  if (text === BUTTON_GITHUB) {
+  if (text === BUTTON_GITHUB && access.role === "admin") {
     const cooldown = await claimGithubCooldown(userId);
     if (!cooldown) {
       await sendMessage(env, chatId, "Отчёт по GitHub уже готовится. Второй раз кнопку мучить не надо.");
@@ -873,7 +950,7 @@ async function handleUpdate(update, env, ctx) {
     return;
   }
 
-  if (text === BUTTON_VIDEO) {
+  if (text === BUTTON_VIDEO && access.role === "admin") {
     await sendMessage(
       env,
       chatId,
@@ -882,22 +959,24 @@ async function handleUpdate(update, env, ctx) {
     return;
   }
 
-  if (text === BUTTON_WEATHER) {
-    await sendMessage(env, chatId, "Отправлен запрос на прогноз погоды.");
+  if (text === BUTTON_WEATHER && access.canWeather) {
+    await sendForAccess(env, chatId, "Отправлен запрос на прогноз погоды.");
     ctx.waitUntil(
       dispatchWeatherWorkflow(env, chatId).catch((error) =>
-        sendMessage(env, chatId, `Не удалось запустить прогноз погоды: ${error.message}`),
+        sendForAccess(env, chatId, `Не удалось запустить прогноз погоды: ${error.message}`),
       ),
     );
     return;
   }
 
-  await sendMessage(env, chatId, "Выбери действие кнопкой под строкой ввода.");
+  await sendForAccess(env, chatId, "Выбери действие кнопкой под строкой ввода.");
 }
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const gmailBrokerResponse = await handleGmailBrokerApi(request, env, { telegramApi });
+    if (gmailBrokerResponse) return gmailBrokerResponse;
     const contextApiResponse = await handleContextApi(request, env);
     if (contextApiResponse) return contextApiResponse;
     const taskApiResponse = await handleTaskApi(request, env);

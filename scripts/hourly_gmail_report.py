@@ -9,8 +9,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 TZ=ZoneInfo(os.getenv('REPORT_TIMEZONE','Europe/Moscow'))
 MINUTES=int(os.getenv('LOOKBACK_MINUTES','65'))
-REPORT=Path('reports/latest.txt'); STATE=Path('state/gmail_monitor.json')
-IMAGE=Path('/tmp/gmail_report.png'); CAPTION=Path('/tmp/gmail_caption.txt')
+REPORT=Path(os.getenv('GMAIL_REPORT_PATH','reports/latest.txt'))
+STATE=Path(os.getenv('GMAIL_STATE_PATH','state/gmail_monitor.json'))
+IMAGE=Path(os.getenv('GMAIL_IMAGE_PATH','/tmp/gmail_report.png'))
+CAPTION=Path(os.getenv('GMAIL_CAPTION_PATH','/tmp/gmail_caption.txt'))
 LABEL=os.getenv('ONE_TIME_LABEL','Одноразовые письма')
 
 class HTMLText(HTMLParser):
@@ -58,6 +60,20 @@ def state_save(uids,validity):
     STATE.parent.mkdir(parents=True,exist_ok=True)
     STATE.write_text(json.dumps({'updated_at':datetime.now(timezone.utc).isoformat(),'uidvalidity':validity,'uids':list(dict.fromkeys(uids))[-1500:]},ensure_ascii=False,indent=2),encoding='utf-8')
 
+def parse_utc(value):
+    try:
+        parsed=datetime.fromisoformat(str(value or '').replace('Z','+00:00'))
+        if parsed.tzinfo is None: parsed=parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError,ValueError): return None
+
+def report_start(now,stored_state=None):
+    explicit=parse_utc(os.getenv('GMAIL_SINCE_UTC',''))
+    if explicit and explicit<=now: return explicit
+    previous=parse_utc((stored_state or {}).get('updated_at'))
+    if previous and previous<=now: return previous
+    return now-timedelta(minutes=MINUTES)
+
 def internal_date(meta):
     m=re.search(rb'INTERNALDATE "([^"]+)"',meta)
     if not m: return None
@@ -89,7 +105,7 @@ def classify(sender,subject,body):
 def fetch():
     account=os.getenv('GMAIL_EMAIL','').strip(); password=os.getenv('GMAIL_APP_PASSWORD','').replace(' ','').strip()
     if not account or not password: raise RuntimeError('Не заданы секреты GMAIL_EMAIL и GMAIL_APP_PASSWORD')
-    now=datetime.now(timezone.utc); cutoff=now-timedelta(minutes=MINUTES); st=state_load(); processed=set(map(str,st.get('uids',[])))
+    now=datetime.now(timezone.utc); st=state_load(); cutoff=report_start(now,st); processed=set(map(str,st.get('uids',[])))
     items=[]; archived=[]; warnings=[]; imap=imaplib.IMAP4_SSL('imap.gmail.com',993)
     try:
         imap.login(account,password); label=utf7(LABEL)
@@ -120,7 +136,7 @@ def fetch():
                 if a=='OK' and b=='OK': archived.append(uid)
                 else: warnings.append(f'Не удалось переместить «{subject}»')
         processed.update(x['uid'] for x in items); state_save(sorted(processed,key=lambda x:int(x)),validity)
-        return sorted(items,key=lambda x:x['time']),archived,warnings
+        return sorted(items,key=lambda x:x['time']),archived,warnings,cutoff
     finally:
         try: imap.close()
         except Exception: pass
@@ -129,10 +145,10 @@ def fetch():
 
 def sender_short(s): return re.sub(r'\s*<[^>]+>\s*','',s).strip().strip('"') or s
 
-def build(items,archived,warnings):
-    now=datetime.now(TZ); start=now-timedelta(minutes=MINUTES); important=[x for x in items if x['important']]
+def build(items,archived,warnings,start_utc=None):
+    now=datetime.now(TZ); start=(start_utc or report_start(datetime.now(timezone.utc),state_load())).astimezone(TZ); important=[x for x in items if x['important']]
     m={'technical':sum(x['cat']=='technical' for x in items),'work':sum(x['cat']=='work' for x in items),'invitation':sum(x['cat']=='invitation' for x in items),'finance':sum(x['cat']=='finance' for x in items),'security':sum(x['cat']=='security' for x in items),'one_time':len(archived),'important':len(important),'total':len(items)}
-    lines=[f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Период: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Новых писем за последние {MINUTES} минут: {len(items)}",'']
+    lines=[f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Период: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК",f"Новых писем: {len(items)}",'']
     if not items: lines+=['За выбранный период новых писем нет.','']
     elif important:
         lines+=['ВАЖНЫЕ ПИСЬМА']
@@ -195,11 +211,11 @@ def caption(report,m,conclusion,action):
 
 def error_report(err):
     now=datetime.now(TZ)
-    start=now-timedelta(minutes=MINUTES)
+    start=report_start(datetime.now(timezone.utc),state_load()).astimezone(TZ)
     auth_failed='AUTHENTICATIONFAILED' in str(err) or 'Invalid credentials' in str(err)
     conclusion='Google отклонил пароль приложения Gmail.' if auth_failed else 'Не удалось получить данные Gmail.'
     action='Создать новый пароль приложения Google и обновить GMAIL_APP_PASSWORD.' if auth_failed else 'Проверить секреты Gmail и журнал GitHub Actions.'
-    report=f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК\nПериод: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК\nНовых писем за последние {MINUTES} минут: 0\n\nОШИБКА ПРОВЕРКИ\nСуть: {err}\nДействие: {action}\n\nИТОГ\nСрочные/технические письма: 0\nОтветы по работе/учёбе: 0\nПриглашения: 0\nФинансовые вопросы: 0\nУгрозы безопасности: 0\nОдноразовые письма: 0\n"
+    report=f"Проверка Gmail: {now.strftime('%d.%m.%Y, %H:%M')} МСК\nПериод: {start.strftime('%d.%m.%Y, %H:%M')} — {now.strftime('%d.%m.%Y, %H:%M')} МСК\nНовых писем: 0\n\nОШИБКА ПРОВЕРКИ\nСуть: {err}\nДействие: {action}\n\nИТОГ\nСрочные/технические письма: 0\nОтветы по работе/учёбе: 0\nПриглашения: 0\nФинансовые вопросы: 0\nУгрозы безопасности: 0\nОдноразовые письма: 0\n"
     m={'technical':0,'work':0,'invitation':0,'finance':0,'security':0,'one_time':0,'important':0,'total':0}
     return report,m,conclusion,action
 

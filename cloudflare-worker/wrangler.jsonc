@@ -37,6 +37,7 @@
     "GCOD_REF_NAME": "main",
     "GITHUB_LOOKBACK_DAYS": "30",
     "GMAIL_WORKFLOW_ID": "hourly-gmail-telegram.yml",
+    "PERSONAL_GMAIL_WORKFLOW_ID": "personal-gmail.yml",
     "WEATHER_WORKFLOW_ID": "weather-report.yml",
     "TASKS_APP_URL": "https://gcodrevit-telegram-bot.demideilan531.workers.dev/tasks/",
     "CHAT_CONTEXT_RETENTION_DAYS": "30",
