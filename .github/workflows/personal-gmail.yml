@@ -1,0 +1,41 @@
+name: Personal Gmail Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: "Opaque Gmail broker request ID"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-gmail-${{ inputs.request_id }}
+  cancel-in-progress: false
+
+jobs:
+  process-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install report dependency
+        run: python -m pip install --quiet pillow
+
+      - name: Process personal Gmail request
+        env:
+          GMAIL_REQUEST_ID: ${{ inputs.request_id }}
+          GMAIL_BROKER_URL: ${{ vars.GMAIL_BROKER_URL }}
+          GMAIL_BROKER_TOKEN: ${{ secrets.GMAIL_BROKER_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python scripts/personal_gmail_job.py
+

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { getAssistantAccess } from "./access.js";
 
 const BUTTON_TASK_CREATE = "➕ Задача";
 const BUTTON_TASKS = "📅 Задачи";
@@ -556,23 +557,16 @@ export async function validateTelegramInitData(initData, botToken, maxAgeSeconds
   }
 }
 
-function adminIdSet(env) {
-  return new Set(
-    String(env.TELEGRAM_ADMIN_IDS || "1839693017")
-      .split(/[\s,;]+/)
-      .filter(Boolean)
-      .map(String),
-  );
-}
-
 export async function authorizedMiniAppUser(request, env) {
   const authorization = request.headers.get("Authorization") || "";
   const initData = authorization.startsWith("tma ")
     ? authorization.slice(4)
     : request.headers.get("X-Telegram-Init-Data") || "";
   const user = await validateTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN);
-  if (!user || !adminIdSet(env).has(String(user.id))) return null;
-  return user;
+  if (!user) return null;
+  const access = await getAssistantAccess(env, user);
+  if (!access?.canTasks) return null;
+  return { ...user, assistantAccess: access };
 }
 
 function json(data, status = 200) {
