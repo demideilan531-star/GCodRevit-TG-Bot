@@ -22,6 +22,7 @@ import {
   BUTTON_MORNING_BRIEFING,
   handleMorningBriefingUpdate,
 } from "./morning-briefing.js";
+import { loadBriefingWeather } from "./briefing-weather.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_PERSONAL_GMAIL = "📬 Моя почта";
@@ -997,6 +998,16 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/health") {
       return new Response("OK", { status: 200 });
+    }
+
+    if (request.method === "GET" && url.pathname === "/health/weather") {
+      try {
+        await loadBriefingWeather();
+        return new Response("OK", { status: 200 });
+      } catch (error) {
+        console.error("Briefing weather health failed", error);
+        return new Response("Weather unavailable", { status: 503 });
+      }
     }
 
     if (request.method === "GET" && url.pathname === "/health/github") {

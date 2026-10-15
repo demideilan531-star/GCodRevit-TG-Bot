@@ -81,6 +81,15 @@ today; a database error is reported separately and never treated as an empty
 list. Long lists are summarized with the remaining count available in the
 calendar. Briefings are on demand; no automatic delivery is configured.
 
+The briefing also includes current Moscow weather and today's morning,
+afternoon, and evening forecast from the existing public Yandex Weather page.
+The Worker extracts its accessibility text with native `HTMLRewriter`; no paid
+weather API or AI key is used. Successful weather data is cached for ten
+minutes and never reused across Moscow midnight. A seven-second source timeout
+and section-level error handling keep personal tasks available when Yandex is
+unavailable. The separate weather button continues sending its image report.
+`GET /health/weather` checks this data source without exposing any user data.
+
 `src/morning-briefing.js` holds the section builders and the shared message
 composer. Future briefing sections can be added to `BRIEFING_SECTIONS` without
 changing task capture, Gmail, weather, or publication handlers. Each section's

@@ -1,4 +1,5 @@
 import { TASK_FLAGS } from "./tasks.js";
+import { buildBriefingWeatherSection } from "./briefing-weather.js";
 
 export const BUTTON_MORNING_BRIEFING = "Утренний брифинг";
 const TIMEZONE = "Europe/Moscow";
@@ -99,22 +100,24 @@ function groupLines(group, kind) {
 
 // Each section loads its own data; a failed section must not hide the rest of the briefing.
 const BRIEFING_SECTIONS = [
+  { id: "weather", build: buildBriefingWeatherSection, unavailable: "Погода временно недоступна. Задачи показаны ниже." },
   { id: "tasks", build: buildTasksSection, unavailable: "Не удалось загрузить задачи. Попробуй ещё раз." },
 ];
 
-export async function buildMorningBriefing(env, { ownerId, access, now = new Date() }) {
+export async function buildMorningBriefing(env, { ownerId, access, now = new Date(), weatherProvider }) {
   const date = new Intl.DateTimeFormat("ru-RU", {
     timeZone: TIMEZONE, weekday: "long", day: "numeric", month: "long", year: "numeric",
   }).format(now);
   const lines = [BUTTON_MORNING_BRIEFING, `На день: ${date} · МСК`];
-  for (const section of BRIEFING_SECTIONS) {
+  const sections = await Promise.all(BRIEFING_SECTIONS.map(async (section) => {
     try {
-      lines.push("", ...await section.build({ env, ownerId, access, now }));
+      return await section.build({ env, ownerId, access, now, weatherProvider });
     } catch (error) {
       console.error(`Morning briefing section ${section.id} failed`, error);
-      lines.push("", section.unavailable);
+      return [section.unavailable];
     }
-  }
+  }));
+  for (const section of sections) if (section.length) lines.push("", ...section);
   const text = lines.join("\n");
   if (text.length <= MAX_MESSAGE_LENGTH) return text;
   const suffix = "\n\nОстальные задачи — в календаре.";
