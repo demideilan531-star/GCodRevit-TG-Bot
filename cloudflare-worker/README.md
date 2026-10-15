@@ -73,19 +73,48 @@ All deadlines are stored as ISO 8601 and displayed in `Europe/Moscow`.
 ## Morning briefing
 
 The `Утренний брифинг` keyboard button and `/briefing` command return one
-personal message for the current day in `Europe/Moscow`. The first section
-lists unfinished tasks due today, with overdue and undated tasks shown
+personal image for the current day in `Europe/Moscow`. Weather appears above
+unfinished tasks due today, with overdue and undated tasks shown
 separately when present. Completed, draft, archived, future, and other users'
 tasks are excluded. An empty list explicitly says that there are no tasks for
 today; a database error is reported separately and never treated as an empty
 list. Long lists are summarized with the remaining count available in the
 calendar. Briefings are on demand; no automatic delivery is configured.
 
-`src/morning-briefing.js` holds the section builders and the shared message
-composer. Future briefing sections can be added to `BRIEFING_SECTIONS` without
-changing task capture, Gmail, weather, or publication handlers. Each section's
-failure is isolated from the rest of the briefing. No new secrets, AI calls,
-GitHub Actions workflows, or database migrations are required.
+Current Moscow temperature and hourly samples come from the existing public
+Yandex Weather page. No pressure or paid weather/model API is included.
+Periods use Moscow time and half-open boundaries: morning before 13:00,
+afternoon 13:00-17:00, evening 17:00-00:00. Min/max temperatures are calculated
+from dated hourly samples, never by relabeling the site's standard dayparts.
+Only today's samples count; duplicate desktop/mobile entries are removed.
+If past hours are missing, the image identifies the remaining hours or an
+elapsed period instead of inventing data. A source failure leaves tasks intact.
+The separate weather button is unchanged.
+
+Delivery flow:
+
+1. The Worker creates a 20-minute `briefing_requests` record and one placeholder
+   message. The database stores routing/status only, not a duplicate task list.
+2. `morning-briefing.yml` receives only the opaque request ID. It authenticates
+   to `POST /internal/briefing/claim` using the existing `GMAIL_BROKER_TOKEN`.
+3. The Worker rechecks the immutable owner's access and returns owner-filtered
+   tasks with `Cache-Control: no-store`. Each request can be claimed only once.
+4. `scripts/morning_briefing.py` uses Pillow and edits the placeholder into a
+   PNG with `editMessageMedia`. The short caption does not duplicate task text.
+   No private image/data is committed, uploaded as an artifact, or logged.
+5. `/internal/briefing/complete` finishes the request. Failures edit the same
+   placeholder. One active request per owner prevents repeated-click queues.
+
+Before deploying this version, apply migration `0004_add_briefing_requests.sql`
+and publish the workflow to the default branch. The workflow reuses repository
+secrets `GMAIL_BROKER_TOKEN`, `TELEGRAM_BOT_TOKEN` and variable `GMAIL_BROKER_URL`;
+their values must match the Worker. No new credentials are needed. Without the
+broker configuration the existing task-only text response remains available.
+There is no scheduled delivery in this workflow.
+
+Verification: Node tests `test_morning_briefing.mjs`, `test_briefing_jobs.mjs`,
+and Python `test_morning_briefing.py` cover owner isolation, permissions,
+one-shot claims, failures, hourly boundaries, and long/empty task layouts.
 
 ## Roles and personal assistants
 

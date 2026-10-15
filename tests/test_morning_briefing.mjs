@@ -155,8 +155,8 @@ test("briefing cannot publish an administrator's personal tasks into a group", a
 test("full webhook exposes the button and sends only the authenticated user's briefing", async (t) => {
   const { env, sqlite, add } = fixture(t);
   sqlite.prepare(
-    `INSERT INTO assistant_users (id, telegram_user_id, username, status, created_at, updated_at)
-     VALUES ('active-test', '200', 'testuser', 'active', ?, ?)`,
+    `INSERT INTO assistant_users (id, telegram_user_id, username, status, can_weather, created_at, updated_at)
+     VALUES ('active-test', '200', 'testuser', 'active', 0, ?, ?)`,
   ).run(NOW.toISOString(), NOW.toISOString());
   add("Чужая задача", { owner: "300", due: null });
   add("Моя задача", { due: null });
