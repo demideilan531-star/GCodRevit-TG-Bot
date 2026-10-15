@@ -142,6 +142,19 @@ class MorningBriefingTest(unittest.TestCase):
                 briefing.deliver(sample_claim(), briefing.Image.new("RGB", (20, 20)))
         self.assertEqual(len(captured), 1)
 
+    def test_final_photo_owns_the_persistent_main_keyboard_before_progress_deletion(self):
+        claim = sample_claim()
+        claim["reply_keyboard"] = {"keyboard": [[{"text": "Погода"}]], "is_persistent": True, "one_time_keyboard": False}
+        captured = []
+        def send(request, timeout):
+            captured.append(request)
+            return io.BytesIO(b'{"ok":true,"result":{"message_id":77,"photo":[{"file_id":"test"}]}}')
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token", "GMAIL_BROKER_URL": "https://example.com"}), patch.object(briefing, "urlopen", send):
+            briefing.deliver(claim, briefing.Image.new("RGB", (20, 20)))
+        self.assertIn(json.dumps(claim["reply_keyboard"], ensure_ascii=False).encode(), captured[0].data)
+        self.assertNotIn(b'inline_keyboard', captured[0].data)
+        self.assertTrue(captured[1].full_url.endswith("/deleteMessage"))
+
     def test_broker_identifies_the_client_instead_of_using_blocked_python_user_agent(self):
         captured = []
 

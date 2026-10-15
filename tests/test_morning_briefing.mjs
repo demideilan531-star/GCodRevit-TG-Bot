@@ -152,7 +152,7 @@ test("briefing cannot publish an administrator's personal tasks into a group", a
   assert.match(sent[0][2], /личном чате/);
 });
 
-test("full webhook exposes the button and sends only the authenticated user's briefing", async (t) => {
+test("full webhook keeps other menu buttons but hides briefing and preserves the manual command", async (t) => {
   const { env, sqlite, add } = fixture(t);
   sqlite.prepare(
     `INSERT INTO assistant_users (id, telegram_user_id, username, status, can_weather, created_at, updated_at)
@@ -168,7 +168,7 @@ test("full webhook exposes the button and sends only the authenticated user's br
     return Response.json({ ok: true, result: {} });
   });
   const ctx = { waitUntil() { assert.fail("Briefing must not launch an AI or GitHub job"); } };
-  for (const text of ["/start", BUTTON_MORNING_BRIEFING]) {
+  for (const text of ["/start", "/briefing"]) {
     const response = await worker.fetch(new Request("https://example.com/", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Telegram-Bot-Api-Secret-Token": env.TELEGRAM_WEBHOOK_SECRET },
@@ -177,7 +177,9 @@ test("full webhook exposes the button and sends only the authenticated user's br
     assert.equal(response.status, 200);
   }
   assert.equal(sent.length, 2);
-  assert.ok(sent[0].reply_markup.keyboard.flat().some(({ text }) => text === BUTTON_MORNING_BRIEFING));
+  assert.ok(!sent[0].reply_markup.keyboard.flat().some(({ text }) => text === BUTTON_MORNING_BRIEFING));
+  assert.equal(sent[0].reply_markup.keyboard.flat().length, 2);
+  assert.equal(sent[0].reply_markup.is_persistent, true);
   assert.match(sent[1].text, /Моя задача/);
   assert.doesNotMatch(sent[1].text, /Чужая задача/);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS total FROM tasks").get().total, 2);

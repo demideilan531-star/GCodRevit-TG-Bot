@@ -215,7 +215,7 @@ def render_briefing(claim, weather):
                 draw.text((96, y), f"Ещё {remaining} — в календаре", font=font(26), fill=MUTED)
                 y += 48
             y += 28
-    draw.text((48, y + 16), "На день. По делу.", font=font(24), fill=GREEN)
+    draw.text((48, y + 16), "С любовью для вас", font=font(24), fill=GREEN)
     return image.crop((0, 0, 1080, y + 94))
 
 
@@ -271,7 +271,7 @@ def deliver(claim, image):
     parts = []
     fields = {
         "chat_id": claim["chat_id"], "photo": "attach://briefing", "caption": caption,
-        "reply_markup": json.dumps({"inline_keyboard": [[
+        "reply_markup": json.dumps(claim.get("reply_keyboard") or {"inline_keyboard": [[
             {"text": "Календарь", "web_app": {"url": os.environ["GMAIL_BROKER_URL"].rstrip("/") + "/tasks/"}},
             {"text": "Яндекс Погода", "url": SOURCE},
         ]]}, ensure_ascii=False),

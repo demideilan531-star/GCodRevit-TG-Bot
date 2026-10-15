@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import worker from "../cloudflare-worker/src/index.js";
-import { handleBriefingBrokerApi, queueBriefing } from "../cloudflare-worker/src/briefing-jobs.js";
+import { handleBriefingBrokerApi, queueBriefing, runScheduledBriefing, MORNING_BRIEFING_CRON } from "../cloudflare-worker/src/briefing-jobs.js";
 import { collectBriefingTasks } from "../cloudflare-worker/src/morning-briefing.js";
 
 function fixture(t) {
@@ -30,11 +30,12 @@ function fixture(t) {
   ).run(crypto.randomUUID(), owner, `Private task ${owner}`, now, now);
   const sent = [], edited = [], dispatched = [], promises = [];
   const helpers = {
-    sendMessage: async (_env, chatId, text) => { sent.push({ chatId, text }); return { result: { message_id: 22 } }; },
+    sendMessage: async (_env, chatId, text, withKeyboard) => { sent.push({ chatId, text, withKeyboard }); return { result: { message_id: 22 } }; },
     telegramApi: async (_env, method, body) => { edited.push({ method, body }); },
     dispatchWorkflow: async (id) => { dispatched.push(id); },
     ctx: { waitUntil(promise) { promises.push(promise); } },
     collectBriefingTasks,
+    keyboard: (role) => ({ keyboard: [[{ text: role === "admin" ? "GitHub" : "Почта" }]], is_persistent: true, one_time_keyboard: false }),
   };
   const message = { from: { id: 200 }, chat: { id: 200, type: "private" } };
   const call = (path, body, token = env.GMAIL_BROKER_TOKEN) => handleBriefingBrokerApi(new Request(`https://example.com/internal/briefing/${path}`, {
@@ -64,12 +65,98 @@ test("claim uses the persisted owner not a supplied ID and can only be claimed o
   const claim = await response.json();
   assert.equal(claim.chat_id, "200");
   assert.equal(claim.message_id, 22);
+  assert.equal(f.sent[0].withKeyboard, false);
+  assert.equal(claim.reply_keyboard.is_persistent, true);
+  assert.equal(claim.reply_keyboard.keyboard[0][0].text, "Почта");
   assert.match(JSON.stringify(claim.tasks), /Private task 200/);
   assert.doesNotMatch(JSON.stringify(claim.tasks), /Private task 300/);
   assert.equal((await f.call("claim", body)).status, 409);
   assert.equal((await f.call("complete", { ...body, success: true })).status, 200);
   assert.equal(f.edited.length, 0);
   assert.equal((await f.call("complete", { ...body, success: true })).status, 409);
+});
+
+test("daily briefing is 08:00 Moscow, once per date, only for the configured administrator", async (t) => {
+  const f = fixture(t);
+  Object.assign(f.env, { MORNING_BRIEFING_ENABLED: "true", MORNING_BRIEFING_USER_ID: "1839693017" });
+  const event = { cron: MORNING_BRIEFING_CRON, scheduledTime: Date.parse("2026-10-16T05:00:00Z") };
+  assert.equal(new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit" }).format(new Date(event.scheduledTime)), "08");
+  assert.equal(await runScheduledBriefing(event, f.env, f.helpers), true);
+  const id = f.dispatched[0];
+  assert.match(id, /^[a-f0-9]{64}$/);
+  assert.equal(f.sent[0].chatId, "1839693017");
+  assert.equal(f.sent[0].withKeyboard, false);
+  f.sqlite.prepare("UPDATE briefing_requests SET status = 'completed', expires_at = '2000-01-01T00:00:00Z' WHERE id = ?").run(id);
+  assert.equal(await runScheduledBriefing(event, f.env, f.helpers), false);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.dispatched.length, 1);
+  assert.equal(await runScheduledBriefing({ ...event, scheduledTime: event.scheduledTime + 86400000 }, f.env, f.helpers), true);
+  assert.equal(f.dispatched.length, 2);
+});
+
+test("disabling automatic delivery leaves the manual briefing request independent", async (t) => {
+  const f = fixture(t);
+  const event = { cron: MORNING_BRIEFING_CRON, scheduledTime: Date.now() };
+  Object.assign(f.env, { MORNING_BRIEFING_ENABLED: "false", MORNING_BRIEFING_USER_ID: "1839693017" });
+  assert.equal(await runScheduledBriefing(event, f.env, f.helpers), false);
+  assert.equal(f.dispatched.length, 0);
+  await queueBriefing(f.env, f.message, f.helpers);
+  assert.equal(f.dispatched.length, 1);
+});
+
+test("scheduler rejects groups, ordinary recipients, and ignores unrelated cron events", async (t) => {
+  const f = fixture(t);
+  Object.assign(f.env, { MORNING_BRIEFING_ENABLED: "true", MORNING_BRIEFING_USER_ID: "-123" });
+  const event = { cron: MORNING_BRIEFING_CRON, scheduledTime: Date.now() };
+  await assert.rejects(runScheduledBriefing(event, f.env, f.helpers), /private Telegram user ID/);
+  f.env.MORNING_BRIEFING_USER_ID = "200";
+  await assert.rejects(runScheduledBriefing(event, f.env, f.helpers), /administrator/);
+  assert.equal(await runScheduledBriefing({ ...event, cron: "0 0 * * *" }, f.env, f.helpers), false);
+  assert.equal(f.sent.length, 0);
+});
+
+test("production cron configuration matches 08:00 Moscow", () => {
+  const config = JSON.parse(readFileSync(new URL("../cloudflare-worker/wrangler.jsonc", import.meta.url), "utf8"));
+  assert.deepEqual(config.triggers.crons, [MORNING_BRIEFING_CRON]);
+  assert.equal(config.vars.MORNING_BRIEFING_ENABLED, "true");
+  assert.equal(config.vars.MORNING_BRIEFING_USER_ID, "1839693017");
+});
+
+test("photo keyboard is built by the Worker from the current role, never from job input", async (t) => {
+  const f = fixture(t);
+  for (const ownerId of [200, 1839693017]) {
+    await queueBriefing(f.env, { from: { id: ownerId }, chat: { id: ownerId, type: "private" } }, f.helpers);
+    const id = f.dispatched.at(-1);
+    const response = await worker.fetch(new Request("https://example.com/internal/briefing/claim", {
+      method: "POST", headers: { Authorization: `Bearer ${f.env.GMAIL_BROKER_TOKEN}` },
+      body: JSON.stringify({ request_id: id, role: "admin" }),
+    }), f.env, f.helpers.ctx);
+    assert.equal(response.status, 200);
+    const claim = await response.json();
+    const texts = claim.reply_keyboard.keyboard.flat().map(({ text }) => text);
+    assert.equal(claim.reply_keyboard.is_persistent, true);
+    assert.equal(claim.reply_keyboard.one_time_keyboard, false);
+    assert.ok(!texts.includes("Утренний брифинг"));
+    assert.equal(texts.some((text) => text.includes("GitHub")), ownerId === 1839693017);
+    assert.equal(texts.length, ownerId === 1839693017 ? 4 : 2);
+  }
+});
+
+test("native scheduled handler dispatches only the opaque ID without an incoming chat message", async (t) => {
+  const f = fixture(t);
+  Object.assign(f.env, { MORNING_BRIEFING_ENABLED: "true", MORNING_BRIEFING_USER_ID: "1839693017", GITHUB_TOKEN: "fake-github" });
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push({ url: String(url), body });
+    return String(url).includes("api.github.com") ? new Response(null, { status: 204 }) : Response.json({ ok: true, result: { message_id: 22 } });
+  });
+  await worker.scheduled({ cron: MORNING_BRIEFING_CRON, scheduledTime: Date.now() }, f.env, f.helpers.ctx);
+  await Promise.all(f.promises);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.chat_id, "1839693017");
+  assert.equal(calls[0].body.reply_markup, undefined);
+  assert.deepEqual(Object.keys(calls[1].body.inputs), ["request_id"]);
 });
 
 test("wrong auth, blocked users, expired IDs and oversized bodies cannot expose tasks", async (t) => {
