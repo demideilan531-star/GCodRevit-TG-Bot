@@ -20,9 +20,10 @@ import {
 } from "./personal-gmail.js";
 import {
   BUTTON_MORNING_BRIEFING,
+  collectBriefingTasks,
   handleMorningBriefingUpdate,
 } from "./morning-briefing.js";
-import { loadBriefingWeather } from "./briefing-weather.js";
+import { handleBriefingBrokerApi } from "./briefing-jobs.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_PERSONAL_GMAIL = "📬 Моя почта";
@@ -851,7 +852,10 @@ async function handleUpdate(update, env, ctx) {
     }
   }
 
-  if (await handleMorningBriefingUpdate(update, env, { access, sendMessage: sendForAccess })) {
+  if (await handleMorningBriefingUpdate(update, env, {
+    access, sendMessage: sendForAccess, telegramApi, ctx,
+    dispatchWorkflow: (requestId) => dispatchWorkflow(env, "morning-briefing.yml", { request_id: requestId }),
+  })) {
     return;
   }
 
@@ -989,6 +993,8 @@ async function handleUpdate(update, env, ctx) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const briefingResponse = await handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks });
+    if (briefingResponse) return briefingResponse;
     const gmailBrokerResponse = await handleGmailBrokerApi(request, env, { telegramApi });
     if (gmailBrokerResponse) return gmailBrokerResponse;
     const contextApiResponse = await handleContextApi(request, env);
@@ -998,16 +1004,6 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/health") {
       return new Response("OK", { status: 200 });
-    }
-
-    if (request.method === "GET" && url.pathname === "/health/weather") {
-      try {
-        await loadBriefingWeather();
-        return new Response("OK", { status: 200 });
-      } catch (error) {
-        console.error("Briefing weather health failed", error);
-        return new Response("Weather unavailable", { status: 503 });
-      }
     }
 
     if (request.method === "GET" && url.pathname === "/health/github") {

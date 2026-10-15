@@ -5,3 +5,4 @@ telegram-webhook-state.json
 __pycache__/
 *.py[cod]
 cloudflare-worker/node_modules/
+cloudflare-worker/.wrangler/

@@ -1,5 +1,5 @@
 import { TASK_FLAGS } from "./tasks.js";
-import { buildBriefingWeatherSection } from "./briefing-weather.js";
+import { queueBriefing } from "./briefing-jobs.js";
 
 export const BUTTON_MORNING_BRIEFING = "Утренний брифинг";
 const TIMEZONE = "Europe/Moscow";
@@ -73,8 +73,8 @@ async function taskGroup(env, ownerId, condition, values, limit) {
   return { rows, total: Number(rows[0]?.total_count || 0) };
 }
 
-async function buildTasksSection({ env, ownerId, now, access }) {
-  if (!access.canTasks) return ["Список задач недоступен."];
+export async function collectBriefingTasks(env, { ownerId, now = new Date(), access }) {
+  if (!access.canTasks) return { unavailable: "Список задач недоступен." };
   if (!env.TASKS_DB) throw new Error("TASKS_DB is not configured");
   const { start, end } = moscowDayBounds(now);
   const [today, overdue, undated] = await Promise.all([
@@ -82,16 +82,35 @@ async function buildTasksSection({ env, ownerId, now, access }) {
     taskGroup(env, ownerId, "due_at < ?", [start], 4),
     taskGroup(env, ownerId, "due_at IS NULL", [], 4),
   ]);
+  const groups = { today, overdue, undated };
+  for (const group of Object.values(groups)) {
+    group.rows = group.rows.map((row) => ({
+      title: cleanText(row.title, 160) || "Без названия",
+      due_at: row.due_at,
+      status: row.status,
+      flags: [...new Set(parseArray(row.flags_json))]
+        .filter((id) => FLAG_LABELS.has(id)).slice(0, 2).map((id) => FLAG_LABELS.get(id)),
+      subtasks_done: parseArray(row.subtasks_json).filter((item) => item?.done === true).length,
+      subtasks_total: parseArray(row.subtasks_json).length,
+      text: taskLine(row, group === today ? "today" : group === overdue ? "overdue" : "undated"),
+    }));
+  }
+  return groups;
+}
+
+async function buildTasksSection(options) {
+  const { today, overdue, undated, unavailable } = await collectBriefingTasks(options.env, options);
+  if (unavailable) return [unavailable];
   const lines = ["Задачи на сегодня"];
   if (!today.total) lines.push("Задач на сегодня нет.");
-  else lines.push(...groupLines(today, "today"));
-  if (overdue.total) lines.push("", "Просроченные задачи", ...groupLines(overdue, "overdue"));
-  if (undated.total) lines.push("", "Без срока", ...groupLines(undated, "undated"));
+  else lines.push(...groupLines(today));
+  if (overdue.total) lines.push("", "Просроченные задачи", ...groupLines(overdue));
+  if (undated.total) lines.push("", "Без срока", ...groupLines(undated));
   return lines;
 }
 
-function groupLines(group, kind) {
-  const lines = group.rows.map((row) => taskLine(row, kind));
+function groupLines(group) {
+  const lines = group.rows.map((row) => row.text);
   if (group.total > group.rows.length) {
     lines.push(`Ещё ${group.total - group.rows.length} — в календаре.`);
   }
@@ -100,18 +119,17 @@ function groupLines(group, kind) {
 
 // Each section loads its own data; a failed section must not hide the rest of the briefing.
 const BRIEFING_SECTIONS = [
-  { id: "weather", build: buildBriefingWeatherSection, unavailable: "Погода временно недоступна. Задачи показаны ниже." },
   { id: "tasks", build: buildTasksSection, unavailable: "Не удалось загрузить задачи. Попробуй ещё раз." },
 ];
 
-export async function buildMorningBriefing(env, { ownerId, access, now = new Date(), weatherProvider }) {
+export async function buildMorningBriefing(env, { ownerId, access, now = new Date() }) {
   const date = new Intl.DateTimeFormat("ru-RU", {
     timeZone: TIMEZONE, weekday: "long", day: "numeric", month: "long", year: "numeric",
   }).format(now);
   const lines = [BUTTON_MORNING_BRIEFING, `На день: ${date} · МСК`];
   const sections = await Promise.all(BRIEFING_SECTIONS.map(async (section) => {
     try {
-      return await section.build({ env, ownerId, access, now, weatherProvider });
+      return await section.build({ env, ownerId, access, now });
     } catch (error) {
       console.error(`Morning briefing section ${section.id} failed`, error);
       return [section.unavailable];
@@ -125,14 +143,18 @@ export async function buildMorningBriefing(env, { ownerId, access, now = new Dat
   return text.slice(0, boundary) + suffix;
 }
 
-export async function handleMorningBriefingUpdate(update, env, { access, sendMessage, now }) {
+export async function handleMorningBriefingUpdate(update, env, { access, sendMessage, telegramApi, dispatchWorkflow, ctx, now }) {
   const message = update.message;
   if (!isMorningBriefingRequest(message?.text)) return false;
   if (message.chat?.type !== "private") {
     await sendMessage(env, message.chat.id, "Открой брифинг в личном чате с ботом.", false);
     return true;
   }
-  const text = await buildMorningBriefing(env, { ownerId: message.from.id, access, now });
-  await sendMessage(env, message.chat.id, text);
+  if (!env.GMAIL_BROKER_TOKEN || !dispatchWorkflow) {
+    const text = await buildMorningBriefing(env, { ownerId: message.from.id, access, now });
+    await sendMessage(env, message.chat.id, text);
+    return true;
+  }
+  await queueBriefing(env, message, { sendMessage, telegramApi, dispatchWorkflow, ctx });
   return true;
 }
