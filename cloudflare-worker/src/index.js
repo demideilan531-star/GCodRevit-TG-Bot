@@ -18,6 +18,10 @@ import {
   handleGmailBrokerApi,
   handlePersonalGmailUpdate,
 } from "./personal-gmail.js";
+import {
+  BUTTON_MORNING_BRIEFING,
+  handleMorningBriefingUpdate,
+} from "./morning-briefing.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_PERSONAL_GMAIL = "📬 Моя почта";
@@ -132,7 +136,10 @@ const RELEASE_FEATURES = [
 function keyboard(role = "admin") {
   if (role !== "admin") {
     return {
-      keyboard: [[{ text: BUTTON_PERSONAL_GMAIL }, { text: BUTTON_WEATHER }]],
+      keyboard: [
+        [{ text: BUTTON_MORNING_BRIEFING }],
+        [{ text: BUTTON_PERSONAL_GMAIL }, { text: BUTTON_WEATHER }],
+      ],
       resize_keyboard: true,
       one_time_keyboard: false,
       is_persistent: true,
@@ -140,6 +147,7 @@ function keyboard(role = "admin") {
   }
   return {
     keyboard: [
+      [{ text: BUTTON_MORNING_BRIEFING }],
       [{ text: BUTTON_GMAIL }, { text: BUTTON_GITHUB }],
       [{ text: BUTTON_VIDEO }, { text: BUTTON_WEATHER }],
     ],
@@ -842,6 +850,10 @@ async function handleUpdate(update, env, ctx) {
     }
   }
 
+  if (await handleMorningBriefingUpdate(update, env, { access, sendMessage: sendForAccess })) {
+    return;
+  }
+
   if (
     access.role !== "admin" &&
     access.canGmail &&
@@ -870,6 +882,7 @@ async function handleUpdate(update, env, ctx) {
         BUTTON_GITHUB,
         BUTTON_VIDEO,
         BUTTON_WEATHER,
+        BUTTON_MORNING_BRIEFING,
       ]),
     })
   ) {

@@ -70,6 +70,23 @@ subtasks. `Срочно` is inferred only from an explicit user request; words s
 list when migration `0002_add_subtasks.sql` is applied.
 All deadlines are stored as ISO 8601 and displayed in `Europe/Moscow`.
 
+## Morning briefing
+
+The `Утренний брифинг` keyboard button and `/briefing` command return one
+personal message for the current day in `Europe/Moscow`. The first section
+lists unfinished tasks due today, with overdue and undated tasks shown
+separately when present. Completed, draft, archived, future, and other users'
+tasks are excluded. An empty list explicitly says that there are no tasks for
+today; a database error is reported separately and never treated as an empty
+list. Long lists are summarized with the remaining count available in the
+calendar. Briefings are on demand; no automatic delivery is configured.
+
+`src/morning-briefing.js` holds the section builders and the shared message
+composer. Future briefing sections can be added to `BRIEFING_SECTIONS` without
+changing task capture, Gmail, weather, or publication handlers. Each section's
+failure is isolated from the rest of the briefing. No new secrets, AI calls,
+GitHub Actions workflows, or database migrations are required.
+
 ## Roles and personal assistants
 
 `TELEGRAM_ADMIN_IDS` contains the main administrators. An administrator keeps
