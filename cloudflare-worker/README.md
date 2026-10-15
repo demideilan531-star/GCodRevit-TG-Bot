@@ -99,8 +99,10 @@ Delivery flow:
    to `POST /internal/briefing/claim` using the existing `GMAIL_BROKER_TOKEN`.
 3. The Worker rechecks the immutable owner's access and returns owner-filtered
    tasks with `Cache-Control: no-store`. Each request can be claimed only once.
-4. `scripts/morning_briefing.py` uses Pillow and edits the placeholder into a
-   PNG with `editMessageMedia`. The short caption does not duplicate task text.
+4. `scripts/morning_briefing.py` uses Pillow and sends one PNG with `sendPhoto`.
+   Only after Telegram confirms delivery is the progress placeholder deleted;
+   reply-keyboard messages cannot reliably be converted into media in place.
+   The short caption does not duplicate task text.
    No private image/data is committed, uploaded as an artifact, or logged.
 5. `/internal/briefing/complete` finishes the request. Failures edit the same
    placeholder. One active request per owner prevents repeated-click queues.

@@ -238,13 +238,39 @@ def broker_request(endpoint, payload):
         raise RuntimeError(f"Briefing broker HTTP {error.code}") from None
 
 
+class TelegramDeliveryError(RuntimeError):
+    pass
+
+
+def telegram_error_category(error):
+    try:
+        description = str(json.loads(error.read(4096)).get("description", "")).lower()
+    except (ValueError, OSError):
+        description = ""
+    for fragment, category in (
+        ("message to edit not found", "message_missing"),
+        ("message can't be edited", "message_not_editable"),
+        ("message is not modified", "not_modified"),
+        ("bot was blocked", "bot_blocked"),
+        ("unauthorized", "unauthorized"),
+        ("button_type_invalid", "button_type_invalid"),
+        ("web_app", "web_app_invalid"),
+        ("photo_invalid", "photo_invalid"),
+    ):
+        if fragment in description:
+            return category
+    if description.startswith("bad request:"):
+        summary = re.sub(r"https?://\S+|\b\d{5,}:[a-z0-9_-]+\b|\b\d{6,}\b", "[redacted]", description)
+        return summary[:240]
+    return "request_rejected"
+
+
 def deliver(claim, image):
     caption = "Погода и задачи на сегодня."
     boundary = f"gcod-{uuid.uuid4().hex}"
     parts = []
     fields = {
-        "chat_id": claim["chat_id"], "message_id": claim["message_id"],
-        "media": json.dumps({"type": "photo", "media": "attach://briefing", "caption": caption}, ensure_ascii=False),
+        "chat_id": claim["chat_id"], "photo": "attach://briefing", "caption": caption,
         "reply_markup": json.dumps({"inline_keyboard": [[
             {"text": "Календарь", "web_app": {"url": os.environ["GMAIL_BROKER_URL"].rstrip("/") + "/tasks/"}},
             {"text": "Яндекс Погода", "url": SOURCE},
@@ -259,19 +285,38 @@ def deliver(claim, image):
         output.getvalue(), f"\r\n--{boundary}--\r\n".encode(),
     ])
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    request = Request(f"https://api.telegram.org/bot{token}/editMessageMedia", data=b"".join(parts), headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    request = Request(f"https://api.telegram.org/bot{token}/sendPhoto", data=b"".join(parts), headers={
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "User-Agent": "GCodRevit-Morning-Briefing-Workflow",
+    })
     try:
         with urlopen(request, timeout=60) as response:
-            if not json.load(response).get("ok"):
+            result = json.load(response)
+            if not result.get("ok") or not result.get("result", {}).get("photo"):
                 raise RuntimeError("Telegram rejected briefing")
     except HTTPError as error:
-        raise RuntimeError(f"Telegram HTTP {error.code}") from None
+        raise TelegramDeliveryError(f"HTTP {error.code}: {telegram_error_category(error)}") from None
+    # Reply-keyboard messages cannot be converted to media; remove progress only after delivery.
+    cleanup = Request(
+        f"https://api.telegram.org/bot{token}/deleteMessage",
+        data=json.dumps({"chat_id": claim["chat_id"], "message_id": claim["message_id"]}).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": "GCodRevit-Morning-Briefing-Workflow"},
+    )
+    try:
+        with urlopen(cleanup, timeout=30) as response:
+            if not json.load(response).get("ok"):
+                print("Briefing delivered; progress cleanup was not confirmed.")
+    except Exception:
+        print("Briefing delivered; progress cleanup failed.")
+    return result["result"]
 
 
 def main():
     request_id = os.environ["BRIEFING_REQUEST_ID"]
     claim = broker_request("claim", {"request_id": request_id})
     delivered = False
+    stage = "weather"
+    failure = None
     try:
         weather = None
         if claim.get("can_weather"):
@@ -279,17 +324,26 @@ def main():
                 weather = parse_weather(fetch_html(), datetime.now(MOSCOW))
             except Exception:
                 print("Weather unavailable; continuing with personal tasks.")
+        stage = "render"
         image = render_briefing(claim, weather)
         if instant(claim["expires_at"]) <= datetime.now(MOSCOW):
             raise RuntimeError("Briefing expired")
+        stage = "telegram"
         deliver(claim, image)
         delivered = True
-    except Exception:
+    except Exception as error:
         # Never print private tasks, broker responses, credentials, or Telegram URLs.
-        print("Briefing image job failed.")
-        raise RuntimeError("Unable to deliver briefing") from None
+        reason = str(error) if isinstance(error, TelegramDeliveryError) else type(error).__name__
+        failure = RuntimeError(f"Briefing failed at {stage}: {reason}")
     finally:
-        broker_request("complete", {"request_id": request_id, "success": delivered})
+        try:
+            broker_request("complete", {"request_id": request_id, "success": delivered})
+        except Exception:
+            print("Briefing completion callback failed.")
+            if delivered:
+                raise RuntimeError("Briefing delivered but completion callback failed") from None
+    if failure:
+        raise failure from None
 
 
 if __name__ == "__main__":

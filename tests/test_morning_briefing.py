@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+from urllib.error import HTTPError
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -112,7 +113,7 @@ class MorningBriefingTest(unittest.TestCase):
         self.assertLess(image.height, 4800)
         self.assertLess(image.height + image.width, 10000)
 
-    def test_delivery_edits_one_message_without_plaintext_task_caption(self):
+    def test_delivery_sends_one_photo_then_removes_progress_without_task_caption(self):
         class Response(io.BytesIO):
             def __enter__(self):
                 return self
@@ -121,13 +122,25 @@ class MorningBriefingTest(unittest.TestCase):
         captured = []
         def send(request, timeout):
             captured.append(request)
-            return Response(b'{"ok":true,"result":{}}')
+            return Response(b'{"ok":true,"result":{"message_id":77,"photo":[{"file_id":"test"}]}}')
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token", "GMAIL_BROKER_URL": "https://example.com"}), patch.object(briefing, "urlopen", send):
             briefing.deliver(sample_claim(), briefing.Image.new("RGB", (20, 20)))
-        self.assertEqual(len(captured), 1)
-        self.assertTrue(captured[0].full_url.endswith("/editMessageMedia"))
+        self.assertEqual(len(captured), 2)
+        self.assertTrue(captured[0].full_url.endswith("/sendPhoto"))
+        self.assertTrue(captured[1].full_url.endswith("/deleteMessage"))
+        self.assertEqual(json.loads(captured[1].data), {"chat_id": "200", "message_id": 12})
         self.assertNotIn("Работа с фасадами".encode(), captured[0].data)
         self.assertIn(b'attach://briefing', captured[0].data)
+
+    def test_failed_photo_send_does_not_delete_the_progress_message(self):
+        captured = []
+        def send(request, timeout):
+            captured.append(request)
+            return io.BytesIO(b'{"ok":false}')
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token", "GMAIL_BROKER_URL": "https://example.com"}), patch.object(briefing, "urlopen", send):
+            with self.assertRaisesRegex(RuntimeError, "Telegram rejected briefing"):
+                briefing.deliver(sample_claim(), briefing.Image.new("RGB", (20, 20)))
+        self.assertEqual(len(captured), 1)
 
     def test_broker_identifies_the_client_instead_of_using_blocked_python_user_agent(self):
         captured = []
@@ -141,6 +154,28 @@ class MorningBriefingTest(unittest.TestCase):
         self.assertEqual(result, {"request_id": "opaque-id"})
         self.assertEqual(captured[0].get_header("User-agent"), "GCodRevit-Morning-Briefing-Workflow")
         self.assertEqual(captured[0].get_header("Authorization"), "Bearer fake-token")
+
+    def test_telegram_failure_category_never_exposes_unknown_response_text(self):
+        for description, expected in [
+            ("Bad Request: message to edit not found", "message_missing"),
+            ("Bad Request: message can't be edited", "message_not_editable"),
+            ("private user data must not appear here", "request_rejected"),
+            ("Bad Request: there is no media in the message to edit", "bad request: there is no media in the message to edit"),
+        ]:
+            error = HTTPError("https://example.com", 400, "Bad Request", {}, io.BytesIO(json.dumps({"description": description}).encode()))
+            self.assertEqual(briefing.telegram_error_category(error), expected)
+
+    def test_completion_failure_does_not_hide_original_delivery_failure(self):
+        claim = sample_claim()
+        claim["expires_at"] = "2099-01-01T00:00:00Z"
+        claim["can_weather"] = False
+        def broker(endpoint, payload):
+            if endpoint == "claim":
+                return claim
+            raise RuntimeError("Callback failed")
+        with patch.dict(os.environ, {"BRIEFING_REQUEST_ID": "opaque"}), patch.object(briefing, "broker_request", broker), patch.object(briefing, "render_briefing", return_value=None), patch.object(briefing, "deliver", side_effect=briefing.TelegramDeliveryError("HTTP 400: message_missing")):
+            with self.assertRaisesRegex(RuntimeError, "Briefing failed at telegram: HTTP 400: message_missing"):
+                briefing.main()
 
 
 if __name__ == "__main__":
