@@ -270,8 +270,7 @@ def deliver(claim, image):
     boundary = f"gcod-{uuid.uuid4().hex}"
     parts = []
     fields = {
-        "chat_id": claim["chat_id"], "message_id": claim["message_id"],
-        "media": json.dumps({"type": "photo", "media": "attach://briefing", "caption": caption}, ensure_ascii=False),
+        "chat_id": claim["chat_id"], "photo": "attach://briefing", "caption": caption,
         "reply_markup": json.dumps({"inline_keyboard": [[
             {"text": "Календарь", "web_app": {"url": os.environ["GMAIL_BROKER_URL"].rstrip("/") + "/tasks/"}},
             {"text": "Яндекс Погода", "url": SOURCE},
@@ -286,13 +285,30 @@ def deliver(claim, image):
         output.getvalue(), f"\r\n--{boundary}--\r\n".encode(),
     ])
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    request = Request(f"https://api.telegram.org/bot{token}/editMessageMedia", data=b"".join(parts), headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    request = Request(f"https://api.telegram.org/bot{token}/sendPhoto", data=b"".join(parts), headers={
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "User-Agent": "GCodRevit-Morning-Briefing-Workflow",
+    })
     try:
         with urlopen(request, timeout=60) as response:
-            if not json.load(response).get("ok"):
+            result = json.load(response)
+            if not result.get("ok") or not result.get("result", {}).get("photo"):
                 raise RuntimeError("Telegram rejected briefing")
     except HTTPError as error:
         raise TelegramDeliveryError(f"HTTP {error.code}: {telegram_error_category(error)}") from None
+    # Reply-keyboard messages cannot be converted to media; remove progress only after delivery.
+    cleanup = Request(
+        f"https://api.telegram.org/bot{token}/deleteMessage",
+        data=json.dumps({"chat_id": claim["chat_id"], "message_id": claim["message_id"]}).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": "GCodRevit-Morning-Briefing-Workflow"},
+    )
+    try:
+        with urlopen(cleanup, timeout=30) as response:
+            if not json.load(response).get("ok"):
+                print("Briefing delivered; progress cleanup was not confirmed.")
+    except Exception:
+        print("Briefing delivered; progress cleanup failed.")
+    return result["result"]
 
 
 def main():

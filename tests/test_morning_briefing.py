@@ -113,7 +113,7 @@ class MorningBriefingTest(unittest.TestCase):
         self.assertLess(image.height, 4800)
         self.assertLess(image.height + image.width, 10000)
 
-    def test_delivery_edits_one_message_without_plaintext_task_caption(self):
+    def test_delivery_sends_one_photo_then_removes_progress_without_task_caption(self):
         class Response(io.BytesIO):
             def __enter__(self):
                 return self
@@ -122,13 +122,25 @@ class MorningBriefingTest(unittest.TestCase):
         captured = []
         def send(request, timeout):
             captured.append(request)
-            return Response(b'{"ok":true,"result":{}}')
+            return Response(b'{"ok":true,"result":{"message_id":77,"photo":[{"file_id":"test"}]}}')
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token", "GMAIL_BROKER_URL": "https://example.com"}), patch.object(briefing, "urlopen", send):
             briefing.deliver(sample_claim(), briefing.Image.new("RGB", (20, 20)))
-        self.assertEqual(len(captured), 1)
-        self.assertTrue(captured[0].full_url.endswith("/editMessageMedia"))
+        self.assertEqual(len(captured), 2)
+        self.assertTrue(captured[0].full_url.endswith("/sendPhoto"))
+        self.assertTrue(captured[1].full_url.endswith("/deleteMessage"))
+        self.assertEqual(json.loads(captured[1].data), {"chat_id": "200", "message_id": 12})
         self.assertNotIn("Работа с фасадами".encode(), captured[0].data)
         self.assertIn(b'attach://briefing', captured[0].data)
+
+    def test_failed_photo_send_does_not_delete_the_progress_message(self):
+        captured = []
+        def send(request, timeout):
+            captured.append(request)
+            return io.BytesIO(b'{"ok":false}')
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token", "GMAIL_BROKER_URL": "https://example.com"}), patch.object(briefing, "urlopen", send):
+            with self.assertRaisesRegex(RuntimeError, "Telegram rejected briefing"):
+                briefing.deliver(sample_claim(), briefing.Image.new("RGB", (20, 20)))
+        self.assertEqual(len(captured), 1)
 
     def test_broker_identifies_the_client_instead_of_using_blocked_python_user_agent(self):
         captured = []
