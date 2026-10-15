@@ -1,6 +1,8 @@
 import { getAssistantAccess } from "./access.js";
 
 const TTL_MS = 20 * 60 * 1000;
+const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const MORNING_BRIEFING_CRON = "0 5 * * *";
 const FAILED = "Не удалось собрать брифинг. Попробуй нажать кнопку ещё раз.";
 
 function response(data, status = 200) {
@@ -28,28 +30,28 @@ async function fail(env, id, telegramApi) {
   });
 }
 
-export async function queueBriefing(env, message, helpers) {
+export async function queueBriefing(env, message, helpers, { requestId, notifyBusy = true } = {}) {
   const { sendMessage, telegramApi, dispatchWorkflow, ctx } = helpers;
   const now = new Date();
   const ownerId = String(message.from.id);
   await env.TASKS_DB.prepare(
-    "DELETE FROM briefing_requests WHERE expires_at < ? AND status IN ('completed', 'failed')",
-  ).bind(now.toISOString()).run();
+    "DELETE FROM briefing_requests WHERE expires_at < ? AND created_at < ? AND status IN ('completed', 'failed')",
+  ).bind(now.toISOString(), new Date(now.getTime() - RETENTION_MS).toISOString()).run();
   // Expired jobs release the unique per-owner slot; private task content is never stored here.
   await env.TASKS_DB.prepare(
     "UPDATE briefing_requests SET status = 'failed', completed_at = ? WHERE expires_at <= ? AND status IN ('pending', 'claimed')",
   ).bind(now.toISOString(), now.toISOString()).run();
-  const id = crypto.randomUUID();
+  const id = requestId || crypto.randomUUID();
   const inserted = await env.TASKS_DB.prepare(
     `INSERT OR IGNORE INTO briefing_requests (id, owner_id, chat_id, status, created_at, expires_at)
      VALUES (?, ?, ?, 'pending', ?, ?)`,
   ).bind(id, ownerId, String(message.chat.id), now.toISOString(), new Date(now.getTime() + TTL_MS).toISOString()).run();
   if (!inserted.meta?.changes) {
-    await sendMessage(env, message.chat.id, "Предыдущий брифинг ещё собирается.");
-    return;
+    if (notifyBusy) await sendMessage(env, message.chat.id, "Предыдущий брифинг ещё собирается.");
+    return false;
   }
   try {
-    const sent = await sendMessage(env, message.chat.id, "Собираю погоду и задачи в один брифинг…");
+    const sent = await sendMessage(env, message.chat.id, "Собираю погоду и задачи в один брифинг…", false);
     const messageId = sent?.result?.message_id;
     if (!messageId) throw new Error("No placeholder message ID");
     await env.TASKS_DB.prepare("UPDATE briefing_requests SET message_id = ? WHERE id = ?")
@@ -58,13 +60,33 @@ export async function queueBriefing(env, message, helpers) {
       await fail(env, id, telegramApi);
       console.error("Morning briefing dispatch failed");
     }));
+    return true;
   } catch {
     await fail(env, id, telegramApi);
     console.error("Morning briefing queue failed");
+    return false;
   }
 }
 
-export async function handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks }) {
+export async function runScheduledBriefing(controller, env, helpers) {
+  if (env.MORNING_BRIEFING_ENABLED !== "true" || controller.cron !== MORNING_BRIEFING_CRON) return false;
+  const ownerId = String(env.MORNING_BRIEFING_USER_ID || "");
+  if (!/^[1-9]\d*$/.test(ownerId) || !Number.isSafeInteger(Number(ownerId))) {
+    throw new Error("Morning briefing recipient must be a private Telegram user ID");
+  }
+  const access = await getAssistantAccess(env, { id: ownerId });
+  if (access?.role !== "admin") throw new Error("Scheduled briefing recipient is not an administrator");
+  if (!env.GMAIL_BROKER_TOKEN) throw new Error("Morning briefing broker is not configured");
+  const date = new Date(Number(controller.scheduledTime) + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // A stable opaque ID prevents duplicate deliveries when the same cron event is retried.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`morning:${date}:${ownerId}`));
+  const requestId = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return queueBriefing(env, {
+    from: { id: ownerId }, chat: { id: ownerId, type: "private" },
+  }, helpers, { requestId, notifyBusy: false });
+}
+
+export async function handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks, keyboard }) {
   const path = new URL(request.url).pathname;
   if (!path.startsWith("/internal/briefing/")) return null;
   if (request.method !== "POST") return response({ error: "Method not allowed" }, 405);
@@ -106,6 +128,7 @@ export async function handleBriefingBrokerApi(request, env, { telegramApi, colle
       request_id: id, chat_id: row.chat_id, message_id: row.message_id,
       generated_at: now.toISOString(), expires_at: row.expires_at,
       can_weather: access.canWeather, tasks,
+      reply_keyboard: keyboard(access.role),
     });
   } catch {
     console.error("Morning briefing broker failed");

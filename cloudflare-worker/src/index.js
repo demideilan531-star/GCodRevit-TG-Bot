@@ -23,7 +23,7 @@ import {
   collectBriefingTasks,
   handleMorningBriefingUpdate,
 } from "./morning-briefing.js";
-import { handleBriefingBrokerApi } from "./briefing-jobs.js";
+import { handleBriefingBrokerApi, runScheduledBriefing } from "./briefing-jobs.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_PERSONAL_GMAIL = "📬 Моя почта";
@@ -139,7 +139,6 @@ function keyboard(role = "admin") {
   if (role !== "admin") {
     return {
       keyboard: [
-        [{ text: BUTTON_MORNING_BRIEFING }],
         [{ text: BUTTON_PERSONAL_GMAIL }, { text: BUTTON_WEATHER }],
       ],
       resize_keyboard: true,
@@ -149,7 +148,6 @@ function keyboard(role = "admin") {
   }
   return {
     keyboard: [
-      [{ text: BUTTON_MORNING_BRIEFING }],
       [{ text: BUTTON_GMAIL }, { text: BUTTON_GITHUB }],
       [{ text: BUTTON_VIDEO }, { text: BUTTON_WEATHER }],
     ],
@@ -991,9 +989,15 @@ async function handleUpdate(update, env, ctx) {
 }
 
 export default {
+  async scheduled(controller, env, ctx) {
+    await runScheduledBriefing(controller, env, {
+      sendMessage, telegramApi, ctx,
+      dispatchWorkflow: (requestId) => dispatchWorkflow(env, "morning-briefing.yml", { request_id: requestId }),
+    });
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const briefingResponse = await handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks });
+    const briefingResponse = await handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks, keyboard });
     if (briefingResponse) return briefingResponse;
     const gmailBrokerResponse = await handleGmailBrokerApi(request, env, { telegramApi });
     if (gmailBrokerResponse) return gmailBrokerResponse;

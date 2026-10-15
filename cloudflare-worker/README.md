@@ -72,14 +72,24 @@ All deadlines are stored as ISO 8601 and displayed in `Europe/Moscow`.
 
 ## Morning briefing
 
-The `Утренний брифинг` keyboard button and `/briefing` command return one
-personal image for the current day in `Europe/Moscow`. Weather appears above
+The briefing is delivered daily at 08:00 `Europe/Moscow` to the configured main
+administrator's private chat. `/briefing` requests an extra report independently
+of the schedule; the dedicated briefing keyboard button is hidden. Each report
+is one personal image for the current day. Weather appears above
 unfinished tasks due today, with overdue and undated tasks shown
 separately when present. Completed, draft, archived, future, and other users'
 tasks are excluded. An empty list explicitly says that there are no tasks for
 today; a database error is reported separately and never treated as an empty
 list. Long lists are summarized with the remaining count available in the
-calendar. Briefings are on demand; no automatic delivery is configured.
+calendar.
+
+The native Cloudflare cron is `0 5 * * *` (UTC). It uses the same private job
+pipeline as manual requests, with a stable opaque ID per owner and Moscow date
+to prevent duplicate cron deliveries. Routing/status metadata is retained for
+seven days for this deduplication; no task text is stored in the job records.
+`MORNING_BRIEFING_ENABLED=false` disables only automatic delivery.
+`MORNING_BRIEFING_USER_ID` must be a positive, authorized administrator ID;
+ordinary users and channels are never scheduled automatically.
 
 Current Moscow temperature and hourly samples come from the existing public
 Yandex Weather page. No pressure or paid weather/model API is included.
@@ -98,11 +108,15 @@ Delivery flow:
 2. `morning-briefing.yml` receives only the opaque request ID. It authenticates
    to `POST /internal/briefing/claim` using the existing `GMAIL_BROKER_TOKEN`.
 3. The Worker rechecks the immutable owner's access and returns owner-filtered
-   tasks with `Cache-Control: no-store`. Each request can be claimed only once.
+   tasks and the role-specific main keyboard with `Cache-Control: no-store`.
+   Each request can be claimed only once.
 4. `scripts/morning_briefing.py` uses Pillow and sends one PNG with `sendPhoto`.
    Only after Telegram confirms delivery is the progress placeholder deleted;
    reply-keyboard messages cannot reliably be converted into media in place.
    The short caption does not duplicate task text.
+   Progress has no reply keyboard. The final photo owns the persistent main
+   keyboard, so deleting progress cannot hide the other assistant controls.
+   The image footer reads `С любовью для вас`.
    No private image/data is committed, uploaded as an artifact, or logged.
 5. `/internal/briefing/complete` finishes the request. Failures edit the same
    placeholder. One active request per owner prevents repeated-click queues.
@@ -112,7 +126,7 @@ and publish the workflow to the default branch. The workflow reuses repository
 secrets `GMAIL_BROKER_TOKEN`, `TELEGRAM_BOT_TOKEN` and variable `GMAIL_BROKER_URL`;
 their values must match the Worker. No new credentials are needed. Without the
 broker configuration the existing task-only text response remains available.
-There is no scheduled delivery in this workflow.
+The GitHub workflow has no cron of its own; Cloudflare is the only scheduler.
 
 Verification: Node tests `test_morning_briefing.mjs`, `test_briefing_jobs.mjs`,
 and Python `test_morning_briefing.py` cover owner isolation, permissions,
