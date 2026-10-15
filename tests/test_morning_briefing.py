@@ -129,6 +129,19 @@ class MorningBriefingTest(unittest.TestCase):
         self.assertNotIn("Работа с фасадами".encode(), captured[0].data)
         self.assertIn(b'attach://briefing', captured[0].data)
 
+    def test_broker_identifies_the_client_instead_of_using_blocked_python_user_agent(self):
+        captured = []
+
+        def send(request, timeout):
+            captured.append(request)
+            return io.BytesIO(b'{"request_id":"opaque-id"}')
+
+        with patch.dict(os.environ, {"GMAIL_BROKER_URL": "https://example.com", "GMAIL_BROKER_TOKEN": "fake-token"}), patch.object(briefing, "urlopen", send):
+            result = briefing.broker_request("claim", {"request_id": "opaque-id"})
+        self.assertEqual(result, {"request_id": "opaque-id"})
+        self.assertEqual(captured[0].get_header("User-agent"), "GCodRevit-Morning-Briefing-Workflow")
+        self.assertEqual(captured[0].get_header("Authorization"), "Bearer fake-token")
+
 
 if __name__ == "__main__":
     unittest.main()

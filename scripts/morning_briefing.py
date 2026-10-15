@@ -224,7 +224,11 @@ def broker_request(endpoint, payload):
     request = Request(
         f"{base}/internal/briefing/{endpoint}",
         data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {os.environ['GMAIL_BROKER_TOKEN']}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {os.environ['GMAIL_BROKER_TOKEN']}",
+            "Content-Type": "application/json",
+            "User-Agent": "GCodRevit-Morning-Briefing-Workflow",
+        },
         method="POST",
     )
     try:
