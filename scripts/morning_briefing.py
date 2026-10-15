@@ -238,6 +238,30 @@ def broker_request(endpoint, payload):
         raise RuntimeError(f"Briefing broker HTTP {error.code}") from None
 
 
+class TelegramDeliveryError(RuntimeError):
+    pass
+
+
+def telegram_error_category(error):
+    try:
+        description = str(json.loads(error.read(4096)).get("description", "")).lower()
+    except (ValueError, OSError):
+        description = ""
+    for fragment, category in (
+        ("message to edit not found", "message_missing"),
+        ("message can't be edited", "message_not_editable"),
+        ("message is not modified", "not_modified"),
+        ("bot was blocked", "bot_blocked"),
+        ("unauthorized", "unauthorized"),
+        ("button_type_invalid", "button_type_invalid"),
+        ("web_app", "web_app_invalid"),
+        ("photo_invalid", "photo_invalid"),
+    ):
+        if fragment in description:
+            return category
+    return "request_rejected"
+
+
 def deliver(claim, image):
     caption = "Погода и задачи на сегодня."
     boundary = f"gcod-{uuid.uuid4().hex}"
@@ -265,13 +289,15 @@ def deliver(claim, image):
             if not json.load(response).get("ok"):
                 raise RuntimeError("Telegram rejected briefing")
     except HTTPError as error:
-        raise RuntimeError(f"Telegram HTTP {error.code}") from None
+        raise TelegramDeliveryError(f"HTTP {error.code}: {telegram_error_category(error)}") from None
 
 
 def main():
     request_id = os.environ["BRIEFING_REQUEST_ID"]
     claim = broker_request("claim", {"request_id": request_id})
     delivered = False
+    stage = "weather"
+    failure = None
     try:
         weather = None
         if claim.get("can_weather"):
@@ -279,17 +305,26 @@ def main():
                 weather = parse_weather(fetch_html(), datetime.now(MOSCOW))
             except Exception:
                 print("Weather unavailable; continuing with personal tasks.")
+        stage = "render"
         image = render_briefing(claim, weather)
         if instant(claim["expires_at"]) <= datetime.now(MOSCOW):
             raise RuntimeError("Briefing expired")
+        stage = "telegram"
         deliver(claim, image)
         delivered = True
-    except Exception:
+    except Exception as error:
         # Never print private tasks, broker responses, credentials, or Telegram URLs.
-        print("Briefing image job failed.")
-        raise RuntimeError("Unable to deliver briefing") from None
+        reason = str(error) if isinstance(error, TelegramDeliveryError) else type(error).__name__
+        failure = RuntimeError(f"Briefing failed at {stage}: {reason}")
     finally:
-        broker_request("complete", {"request_id": request_id, "success": delivered})
+        try:
+            broker_request("complete", {"request_id": request_id, "success": delivered})
+        except Exception:
+            print("Briefing completion callback failed.")
+            if delivered:
+                raise RuntimeError("Briefing delivered but completion callback failed") from None
+    if failure:
+        raise failure from None
 
 
 if __name__ == "__main__":

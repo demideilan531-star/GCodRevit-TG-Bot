@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+from urllib.error import HTTPError
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -141,6 +142,27 @@ class MorningBriefingTest(unittest.TestCase):
         self.assertEqual(result, {"request_id": "opaque-id"})
         self.assertEqual(captured[0].get_header("User-agent"), "GCodRevit-Morning-Briefing-Workflow")
         self.assertEqual(captured[0].get_header("Authorization"), "Bearer fake-token")
+
+    def test_telegram_failure_category_never_exposes_unknown_response_text(self):
+        for description, expected in [
+            ("Bad Request: message to edit not found", "message_missing"),
+            ("Bad Request: message can't be edited", "message_not_editable"),
+            ("private user data must not appear here", "request_rejected"),
+        ]:
+            error = HTTPError("https://example.com", 400, "Bad Request", {}, io.BytesIO(json.dumps({"description": description}).encode()))
+            self.assertEqual(briefing.telegram_error_category(error), expected)
+
+    def test_completion_failure_does_not_hide_original_delivery_failure(self):
+        claim = sample_claim()
+        claim["expires_at"] = "2099-01-01T00:00:00Z"
+        claim["can_weather"] = False
+        def broker(endpoint, payload):
+            if endpoint == "claim":
+                return claim
+            raise RuntimeError("Callback failed")
+        with patch.dict(os.environ, {"BRIEFING_REQUEST_ID": "opaque"}), patch.object(briefing, "broker_request", broker), patch.object(briefing, "render_briefing", return_value=None), patch.object(briefing, "deliver", side_effect=briefing.TelegramDeliveryError("HTTP 400: message_missing")):
+            with self.assertRaisesRegex(RuntimeError, "Briefing failed at telegram: HTTP 400: message_missing"):
+                briefing.main()
 
 
 if __name__ == "__main__":
