@@ -148,6 +148,7 @@ class MorningBriefingTest(unittest.TestCase):
             ("Bad Request: message to edit not found", "message_missing"),
             ("Bad Request: message can't be edited", "message_not_editable"),
             ("private user data must not appear here", "request_rejected"),
+            ("Bad Request: there is no media in the message to edit", "bad request: there is no media in the message to edit"),
         ]:
             error = HTTPError("https://example.com", 400, "Bad Request", {}, io.BytesIO(json.dumps({"description": description}).encode()))
             self.assertEqual(briefing.telegram_error_category(error), expected)

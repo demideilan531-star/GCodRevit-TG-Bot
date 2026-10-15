@@ -259,6 +259,9 @@ def telegram_error_category(error):
     ):
         if fragment in description:
             return category
+    if description.startswith("bad request:"):
+        summary = re.sub(r"https?://\S+|\b\d{5,}:[a-z0-9_-]+\b|\b\d{6,}\b", "[redacted]", description)
+        return summary[:240]
     return "request_rejected"
 
 
