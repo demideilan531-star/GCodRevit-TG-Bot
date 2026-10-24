@@ -24,6 +24,7 @@ import {
   handleMorningBriefingUpdate,
 } from "./morning-briefing.js";
 import { handleBriefingBrokerApi, runScheduledBriefing } from "./briefing-jobs.js";
+import { handleSportApi, handleSportUpdate, runSportReminders } from "./sport.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_PERSONAL_GMAIL = "📬 Моя почта";
@@ -850,6 +851,10 @@ async function handleUpdate(update, env, ctx) {
     }
   }
 
+  if (env.SPORT_ENABLED === "true" && await handleSportUpdate(update, env, { telegramApi, sendMessage: sendForAccess })) {
+    return;
+  }
+
   if (await handleMorningBriefingUpdate(update, env, {
     access, sendMessage: sendForAccess, telegramApi, ctx,
     dispatchWorkflow: (requestId) => dispatchWorkflow(env, "morning-briefing.yml", { request_id: requestId }),
@@ -909,7 +914,7 @@ async function handleUpdate(update, env, ctx) {
     await sendMessage(
       env,
       chatId,
-      "Напиши задачу текстом или голосом. Календарь открывается кнопкой Open App в профиле бота.",
+      "Напиши задачу текстом или голосом. Задачи и спортивный дневник открываются кнопкой Open App в профиле бота.",
       true,
       access.role,
     );
@@ -990,13 +995,19 @@ async function handleUpdate(update, env, ctx) {
 
 export default {
   async scheduled(controller, env, ctx) {
-    await runScheduledBriefing(controller, env, {
-      sendMessage, telegramApi, ctx,
-      dispatchWorkflow: (requestId) => dispatchWorkflow(env, "morning-briefing.yml", { request_id: requestId }),
-    });
+    const results = await Promise.allSettled([
+      runSportReminders(controller, env, { telegramApi }),
+      runScheduledBriefing(controller, env, {
+        sendMessage, telegramApi, ctx,
+        dispatchWorkflow: (requestId) => dispatchWorkflow(env, "morning-briefing.yml", { request_id: requestId }),
+      }),
+    ]);
+    if (results.some(result => result.status === "rejected")) throw new Error("Scheduled assistant job failed");
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const sportResponse = await handleSportApi(request, env);
+    if (sportResponse) return sportResponse;
     const briefingResponse = await handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks, keyboard });
     if (briefingResponse) return briefingResponse;
     const gmailBrokerResponse = await handleGmailBrokerApi(request, env, { telegramApi });
@@ -1043,6 +1054,10 @@ export default {
         console.error("GitHub health check failed", error);
         return new Response("GitHub unavailable", { status: 503 });
       }
+    }
+
+    if (request.method === "GET" && url.pathname === "/sport") {
+      return Response.redirect(`${url.origin}/sport/`, 302);
     }
 
     if (request.method === "GET" && url.pathname === "/tasks") {

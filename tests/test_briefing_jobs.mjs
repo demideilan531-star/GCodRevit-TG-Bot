@@ -117,7 +117,8 @@ test("scheduler rejects groups, ordinary recipients, and ignores unrelated cron 
 
 test("production cron configuration matches 08:00 Moscow", () => {
   const config = JSON.parse(readFileSync(new URL("../cloudflare-worker/wrangler.jsonc", import.meta.url), "utf8"));
-  assert.deepEqual(config.triggers.crons, [MORNING_BRIEFING_CRON]);
+  assert.equal(config.triggers.crons.filter(cron => cron === MORNING_BRIEFING_CRON).length, 1);
+  assert.ok(config.triggers.crons.includes("* * * * *"));
   assert.equal(config.vars.MORNING_BRIEFING_ENABLED, "true");
   assert.equal(config.vars.MORNING_BRIEFING_USER_ID, "1839693017");
 });

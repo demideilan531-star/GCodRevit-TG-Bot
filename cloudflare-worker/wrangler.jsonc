@@ -7,7 +7,7 @@
   "workers_dev": true,
   "keep_vars": true,
   "triggers": {
-    "crons": ["0 5 * * *"]
+    "crons": ["0 5 * * *", "* * * * *"]
   },
   "assets": {
     "directory": "./public",
@@ -35,6 +35,7 @@
     "TELEGRAM_ADMIN_IDS": "1839693017",
     "MORNING_BRIEFING_ENABLED": "true",
     "MORNING_BRIEFING_USER_ID": "1839693017",
+    "SPORT_ENABLED": "true",
     "GITHUB_REPOSITORY": "demideilan531-star/GCodRevit-TG-Bot",
     "GITHUB_REF_NAME": "main",
     "GITHUB_WORKFLOW_ID": "github-report.yml",
