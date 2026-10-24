@@ -8,6 +8,7 @@ const MIGRATIONS = [
   "0003_add_assistant_users_and_gmail.sql",
   "0004_add_briefing_requests.sql",
   "0005_add_sport.sql",
+  "0006_add_sport_sheet_exports.sql",
 ];
 
 export const OWNER = "810001";

@@ -109,6 +109,22 @@
             </fieldset>
             <div class="save-row"><p class="save-status" id="settingsSaveStatus" role="status" aria-live="polite">Нет изменений</p><button class="primary-button" id="saveSettings" type="submit" disabled><i data-lucide="check"></i>Сохранить</button></div>
           </form>
+          <form id="sheetExportForm" class="sheet-export-form" aria-labelledby="sheetExportHeading">
+            <div class="section-heading"><h3 id="sheetExportHeading">Google Sheets</h3><i data-lucide="sheet" class="muted-icon" aria-hidden="true"></i></div>
+            <fieldset id="sheetExportFields" class="plain-fieldset">
+              <label class="field"><span>Ссылка на копию шаблона</span><input id="sheetExportUrl" name="spreadsheet_url" type="url" inputmode="url" maxlength="2048" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/…" required /></label>
+              <label class="reminder-label sheet-export-toggle"><input id="sheetExportEnabled" name="enabled" type="checkbox" /><span>Ежедневная выгрузка</span></label>
+            </fieldset>
+            <dl class="sheet-export-details" aria-live="polite">
+              <div><dt>Состояние</dt><dd id="sheetExportState">Экспорт не настроен</dd></div>
+              <div><dt>Расписание</dt><dd id="sheetExportSchedule">Не запланировано</dd></div>
+              <div><dt>Последняя выгрузка</dt><dd id="sheetExportLastSync">Ещё не было</dd></div>
+              <div id="sheetServiceRow" hidden><dt>Аккаунт сервиса</dt><dd id="sheetServiceEmail" class="sheet-service-email" dir="ltr" tabindex="0"></dd></div>
+              <div id="sheetVerificationRow" hidden><dt><label for="sheetVerificationCode">Подтверждение доступа</label></dt><dd><input id="sheetVerificationCode" class="sheet-verification-code" type="text" readonly autocomplete="off" spellcheck="false" /></dd></div>
+            </dl>
+            <p id="sheetExportError" class="inline-error" role="alert" hidden></p>
+            <div class="save-row"><p class="save-status" id="sheetExportSaveStatus" role="status" aria-live="polite">Нет изменений</p><button class="primary-button" id="saveSheetExport" type="submit" disabled><i data-lucide="check"></i>Сохранить</button></div>
+          </form>
         </section>
       </main>
     </div>
