@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#ffffff" />
+    <title>Спорт · Дневник</title>
+    <link rel="stylesheet" href="./sport.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js?61"></script>
+    <script src="./vendor/lucide-0.468.0.min.js" defer></script>
+    <script src="./sport.js" type="module"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <nav class="product-switch" aria-label="Раздел приложения">
+        <a href="/tasks/">Задачи</a><a href="/context/">Контекст</a><a href="/sport/" aria-current="page">Спорт</a>
+      </nav>
+      <header class="app-header">
+        <div class="brand"><span class="brand-icon" aria-hidden="true"><i data-lucide="activity"></i></span><div><h1>Спорт</h1><p>Личный дневник</p></div></div>
+        <button class="icon-button" id="refreshButton" type="button" aria-label="Обновить данные" title="Обновить данные"><i data-lucide="refresh-cw"></i></button>
+      </header>
+      <p class="demo-banner" id="demoBanner" hidden>ДЕМО · Вымышленные данные · Изменения до перезагрузки</p>
+      <div class="load-status" id="loadStatus" role="status">Загрузка дневника…</div>
+      <section class="access-error" id="accessError" role="alert" hidden>
+        <i data-lucide="lock-keyhole" aria-hidden="true"></i><h2 id="accessTitle">Нет доступа</h2><p id="accessMessage"></p>
+        <button class="secondary-button" id="retryButton" type="button"><i data-lucide="refresh-cw"></i>Повторить</button>
+      </section>
+      <main id="mainContent" hidden>
+        <section id="todayView" class="view" aria-labelledby="dayHeading">
+          <div class="section-heading date-heading">
+            <div><p class="eyebrow" id="dayRelation">СЕГОДНЯ</p><h2 id="dayHeading"></h2></div>
+            <div class="date-controls">
+              <button class="icon-button" id="previousDay" type="button" aria-label="Предыдущий день" title="Предыдущий день"><i data-lucide="chevron-left"></i></button>
+              <label class="date-picker" title="Выбрать дату"><i data-lucide="calendar-days" aria-hidden="true"></i><span class="sr-only">Дата записи</span><input id="dayDate" type="date" required /></label>
+              <button class="icon-button" id="nextDay" type="button" aria-label="Следующий день" title="Следующий день"><i data-lucide="chevron-right"></i></button>
+            </div>
+          </div>
+          <button class="text-button back-today" id="backToday" type="button" hidden>Вернуться к сегодня</button>
+          <div class="day-summary" id="daySummary" aria-label="Показатели дня"></div>
+          <form id="dayForm">
+            <fieldset id="dayFields" class="plain-fieldset">
+              <div class="section-heading"><h3>Показатели</h3><span class="section-meta" id="dayRecordState">Нет записи</span></div>
+              <div class="field-grid">
+                <label class="field"><span><i data-lucide="scale"></i>Вес <small>кг</small></span><input name="weight_kg" type="number" inputmode="decimal" min="20" max="400" step="0.1" placeholder="—" /></label>
+                <label class="field"><span><i data-lucide="moon"></i>Сон <small>ч</small></span><input name="sleep_hours" type="number" inputmode="decimal" min="0" max="24" step="0.1" placeholder="—" /></label>
+                <label class="field"><span><i data-lucide="droplets"></i>Вода <small>мл</small></span><input name="water_ml" type="number" inputmode="numeric" min="0" max="20000" step="1" placeholder="—" /></label>
+                <label class="field"><span><i data-lucide="footprints"></i>Шаги</span><input name="steps" type="number" inputmode="numeric" min="0" max="150000" step="1" placeholder="—" /></label>
+              </div>
+              <div class="water-action"><button class="secondary-button compact" id="addWater" type="button"><i data-lucide="plus"></i>250 мл воды</button></div>
+              <div class="field-grid">
+                <label class="field"><span>Качество сна</span><select name="sleep_quality"><option value="">Не отмечено</option><option value="1">1 · Очень плохо</option><option value="2">2 · Плохо</option><option value="3">3 · Средне</option><option value="4">4 · Хорошо</option><option value="5">5 · Отлично</option></select></label>
+                <label class="field"><span>Тренировка</span><select name="training" id="trainingSelect"><option value="">Не отмечено</option></select></label>
+              </div>
+              <label class="field"><span>Самочувствие</span><select name="mood"><option value="">Не отмечено</option><option value="1">1 · Очень плохое</option><option value="2">2 · Плохое</option><option value="3">3 · Обычное</option><option value="4">4 · Хорошее</option><option value="5">5 · Отличное</option></select></label>
+              <fieldset class="nutrition-field"><legend>Питание по плану</legend><div class="segmented nutrition-control"><label><input name="nutrition" type="radio" value="" checked /><span>Не отмечено</span></label><label><input name="nutrition" type="radio" value="yes" /><span>Да</span></label><label><input name="nutrition" type="radio" value="no" /><span>Нет</span></label></div></fieldset>
+              <label class="field"><span>Заметка дня</span><textarea name="comment" maxlength="2000" rows="2" placeholder="Самочувствие, нагрузка, восстановление"></textarea></label>
+              <label class="field"><span>Заметка тренера <small>вручную</small></span><textarea name="coach_note" maxlength="2000" rows="2" placeholder="—"></textarea></label>
+            </fieldset>
+            <div class="save-row"><p class="save-status" id="daySaveStatus" role="status" aria-live="polite">Нет изменений</p><button class="primary-button" id="saveDay" type="submit" disabled><i data-lucide="check"></i>Сохранить день</button></div>
+          </form>
+          <section class="meals-section" aria-labelledby="mealsHeading">
+            <div class="section-heading"><div><h3 id="mealsHeading">Питание</h3><p class="section-meta" id="mealCount"></p></div><button class="icon-button accent" id="addMeal" type="button" aria-label="Добавить приём пищи" title="Добавить приём пищи"><i data-lucide="plus"></i></button></div>
+            <div class="macro-totals" id="macroTotals"></div>
+            <div id="mealList" class="meal-list"></div>
+          </section>
+        </section>
+
+        <section id="calendarView" class="view" aria-labelledby="calendarHeading" hidden>
+          <div class="section-heading"><h2 id="calendarHeading">Календарь</h2><button class="text-button" id="currentMonth" type="button">Этот месяц</button></div>
+          <div class="month-toolbar"><button class="icon-button" id="previousMonth" type="button" aria-label="Предыдущий месяц" title="Предыдущий месяц"><i data-lucide="chevron-left"></i></button><label class="field month-field"><span class="sr-only">Месяц</span><input type="month" id="calendarMonth" required /></label><button class="icon-button" id="nextMonth" type="button" aria-label="Следующий месяц" title="Следующий месяц"><i data-lucide="chevron-right"></i></button></div>
+          <div class="calendar-weekdays" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+          <div class="calendar-grid" id="calendarGrid" aria-label="Дни месяца"></div>
+          <div class="calendar-legend"><span><b class="data-dot"></b>Есть запись</span><span><b class="data-dot meal-dot"></b>Есть питание</span></div>
+          <p class="inline-error" id="calendarError" role="alert" hidden></p>
+          <button class="secondary-button" id="calendarRetry" type="button" hidden><i data-lucide="refresh-cw"></i>Повторить</button>
+          <div class="month-summary" id="monthSummary"></div>
+        </section>
+
+        <section id="progressView" class="view" aria-labelledby="progressHeading" hidden>
+          <div class="section-heading"><h2 id="progressHeading">Прогресс</h2><div class="segmented period-control" aria-label="Период"><button type="button" data-period="7" aria-pressed="true">7 дней</button><button type="button" data-period="30" aria-pressed="false">30 дней</button></div></div>
+          <label class="field progress-date"><span>По дату включительно</span><input id="progressEnd" type="date" required /></label>
+          <p class="period-label" id="progressRange"></p>
+          <p class="inline-error" id="progressError" role="alert" hidden></p>
+          <button class="secondary-button" id="progressRetry" type="button" hidden><i data-lucide="refresh-cw"></i>Повторить</button>
+          <div id="progressSummary" class="progress-summary" aria-label="Итоги периода"></div>
+          <div id="progressCharts" class="progress-charts"></div>
+          <section class="export-section" aria-labelledby="exportHeading"><h3 id="exportHeading">Экспорт CSV</h3><div class="export-actions"><button class="secondary-button" type="button" data-export="days"><i data-lucide="download"></i>Дневник</button><button class="secondary-button" type="button" data-export="meals"><i data-lucide="download"></i>Питание</button></div><p id="exportStatus" class="save-status" role="status"></p></section>
+        </section>
+
+        <section id="settingsView" class="view" aria-labelledby="settingsHeading" hidden>
+          <div class="section-heading"><h2 id="settingsHeading">Настройки</h2><i data-lucide="sliders-horizontal" class="muted-icon" aria-hidden="true"></i></div>
+          <form id="settingsForm">
+            <fieldset id="settingsFields" class="plain-fieldset">
+              <label class="field"><span>Часовой пояс</span><input id="timezone" name="timezone" list="timezoneOptions" required maxlength="80" autocomplete="off" placeholder="Europe/Moscow" /><datalist id="timezoneOptions"><option value="Europe/Moscow"></option><option value="Europe/Kaliningrad"></option><option value="Europe/Samara"></option><option value="Asia/Yekaterinburg"></option><option value="Asia/Novosibirsk"></option><option value="Asia/Krasnoyarsk"></option><option value="Asia/Irkutsk"></option><option value="Asia/Yakutsk"></option><option value="Asia/Vladivostok"></option><option value="Asia/Kamchatka"></option><option value="UTC"></option></datalist></label>
+              <h3 class="subheading">Мои цели</h3>
+              <div class="field-grid">
+                <label class="field"><span>Вес <small>кг</small></span><input name="weight_kg" type="number" inputmode="decimal" min="20" max="400" step="0.1" placeholder="Не задана" /></label>
+                <label class="field"><span>Сон <small>ч</small></span><input name="sleep_hours" type="number" inputmode="decimal" min="0" max="24" step="0.1" placeholder="Не задана" /></label>
+                <label class="field"><span>Вода <small>мл</small></span><input name="water_ml" type="number" inputmode="numeric" min="0" max="20000" step="1" placeholder="Не задана" /></label>
+                <label class="field"><span>Шаги</span><input name="steps" type="number" inputmode="numeric" min="0" max="150000" step="1" placeholder="Не задана" /></label>
+                <label class="field"><span>Энергия <small>ккал</small></span><input name="calories_kcal" type="number" inputmode="decimal" min="0" max="10000" step="0.1" placeholder="Не задана" /></label>
+                <label class="field"><span>Белки <small>г</small></span><input name="protein_g" type="number" inputmode="decimal" min="0" max="1000" step="0.1" placeholder="Не задана" /></label>
+                <label class="field"><span>Жиры <small>г</small></span><input name="fat_g" type="number" inputmode="decimal" min="0" max="1000" step="0.1" placeholder="Не задана" /></label>
+                <label class="field"><span>Углеводы <small>г</small></span><input name="carbs_g" type="number" inputmode="decimal" min="0" max="2000" step="0.1" placeholder="Не задана" /></label>
+              </div>
+              <div class="section-heading reminders-heading"><h3>Напоминания</h3><button class="icon-button" id="addReminder" type="button" aria-label="Добавить напоминание" title="Добавить напоминание"><i data-lucide="plus"></i></button></div>
+              <div id="reminderList" class="reminder-list"></div>
+            </fieldset>
+            <div class="save-row"><p class="save-status" id="settingsSaveStatus" role="status" aria-live="polite">Нет изменений</p><button class="primary-button" id="saveSettings" type="submit" disabled><i data-lucide="check"></i>Сохранить</button></div>
+          </form>
+        </section>
+      </main>
+    </div>
+    <nav id="bottomNav" class="bottom-nav" aria-label="Дневник" hidden>
+      <button type="button" data-view="today" aria-current="page"><i data-lucide="notebook-pen"></i><span>Сегодня</span></button>
+      <button type="button" data-view="calendar"><i data-lucide="calendar-days"></i><span>Календарь</span></button>
+      <button type="button" data-view="progress"><i data-lucide="chart-no-axes-combined"></i><span>Прогресс</span></button>
+      <button type="button" data-view="settings"><i data-lucide="settings-2"></i><span>Настройки</span></button>
+    </nav>
+    <dialog id="mealDialog" aria-labelledby="mealDialogTitle">
+      <form id="mealForm">
+        <div class="dialog-heading"><h2 id="mealDialogTitle">Приём пищи</h2><button class="icon-button" id="closeMeal" type="button" aria-label="Закрыть" title="Закрыть"><i data-lucide="x"></i></button></div>
+        <fieldset class="plain-fieldset" id="mealFields">
+          <div class="field-grid"><label class="field"><span>Дата</span><input name="date" type="date" required /></label><label class="field"><span>Время</span><input name="time" type="time" required /></label></div>
+          <label class="field"><span>Приём пищи</span><input name="title" maxlength="120" required autocomplete="off" placeholder="Название" /></label>
+          <div class="field-grid">
+            <label class="field"><span>Энергия <small>ккал</small></span><input name="calories_kcal" type="number" inputmode="decimal" min="0" max="10000" step="0.1" placeholder="—" /></label>
+            <label class="field"><span>Белки <small>г</small></span><input name="protein_g" type="number" inputmode="decimal" min="0" max="1000" step="0.1" placeholder="—" /></label>
+            <label class="field"><span>Жиры <small>г</small></span><input name="fat_g" type="number" inputmode="decimal" min="0" max="1000" step="0.1" placeholder="—" /></label>
+            <label class="field"><span>Углеводы <small>г</small></span><input name="carbs_g" type="number" inputmode="decimal" min="0" max="2000" step="0.1" placeholder="—" /></label>
+          </div>
+          <label class="field"><span>Заметка</span><textarea name="note" rows="2" maxlength="2000" placeholder="—"></textarea></label>
+        </fieldset>
+        <p class="save-status" id="mealSaveStatus" role="status" aria-live="polite"></p>
+        <div class="dialog-actions"><button class="icon-button danger" id="deleteMeal" type="button" aria-label="Удалить приём пищи" title="Удалить приём пищи"><i data-lucide="trash-2"></i></button><button class="secondary-button" id="cancelMeal" type="button">Отмена</button><button class="primary-button" id="saveMeal" type="submit"><i data-lucide="check"></i>Сохранить</button></div>
+      </form>
+    </dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
