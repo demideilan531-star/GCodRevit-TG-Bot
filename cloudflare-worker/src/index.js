@@ -25,6 +25,7 @@ import {
 } from "./morning-briefing.js";
 import { handleBriefingBrokerApi, runScheduledBriefing } from "./briefing-jobs.js";
 import { handleSportApi, handleSportUpdate, runSportReminders } from "./sport.js";
+import { runSportSheetExports } from "./sport-sheets.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_PERSONAL_GMAIL = "📬 Моя почта";
@@ -997,6 +998,7 @@ export default {
   async scheduled(controller, env, ctx) {
     const results = await Promise.allSettled([
       runSportReminders(controller, env, { telegramApi }),
+      runSportSheetExports(controller, env),
       runScheduledBriefing(controller, env, {
         sendMessage, telegramApi, ctx,
         dispatchWorkflow: (requestId) => dispatchWorkflow(env, "morning-briefing.yml", { request_id: requestId }),

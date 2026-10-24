@@ -95,3 +95,70 @@ because the feature is deployed.
 Local checks use the real SQLite schema through a D1-compatible fixture,
 signed test Mini App data and fictional users only. The browser preview's
 `?demo=1` data is fictional and never synchronized to a real account.
+
+## Optional daily Google Sheet mirror
+
+Migration `0006_add_sport_sheet_exports.sql` adds one private, opt-in destination
+per Telegram owner. It does not change the daily diary schema or the reference
+spreadsheet. The original sample spreadsheet ID is explicitly denied as a write
+destination, even if it is accidentally pasted into Settings.
+
+The URL setting is separate from personal goals and reminder schedules. Saving a
+URL does not grant Google access. The Worker needs a dedicated Google service
+account JSON in the `GOOGLE_SHEETS_SERVICE_ACCOUNT` Cloudflare Secret. It uses only
+the Sheets OAuth scope, not Gmail/Drive-wide account access. There is no domain-wide
+delegation, user password or OpenAI API key. Never commit/download this credential
+into the repository or print it to logs. Give its email Editor access only to the
+chosen destination copies.
+
+Before enabling an unverified destination, the user proves edit access by adding
+the displayed verification code to the spreadsheet title once. This prevents an
+allowlisted user from binding another person's already-shared destination just by
+knowing its URL. The code can be removed from the title after verification; no
+verification cells or extra tabs are inserted. One sheet cannot be registered to
+two bot users. Disabling or replacing a destination invalidates any running lease.
+
+The target must retain exactly the example's three named tabs. Export rejects an
+additional/missing tab or mismatched daily headers rather than silently inventing
+a layout. After edit-access verification, enabling the destination sets only the
+diary's F2:F dropdown to the five training types already present in the reference
+dictionary and the bot. This fixes the sample's shorter three-choice rule and
+confirms that the service account can edit the destination. Values, formatting,
+other validation rules and the original reference remain untouched.
+
+| Target | Value from the bot database |
+| --- | --- |
+| Diary A | Local date as a native Sheets date number |
+| Diary B | Weight, kg |
+| Diary C | Sleep, hours |
+| Diary D | Water, liters (converted from ml) |
+| Diary E | Steps |
+| Diary F | Russian training label |
+| Diary G | Nutrition boolean, blank when unknown |
+| Diary H | Mood score and label |
+| Diary I | Own comment plus named meals and manual calories/B/F/C |
+| Diary J | Own coach note; an existing sheet note is retained when the database note is empty |
+| Goals B2:B5 | Configured sleep, steps, water liters, weight goals only |
+
+No extra calorie columns or tabs are introduced. The dashboard's formulas, charts,
+headers and layout are not overwritten. Date rows are matched and updated in place;
+missing dates are appended. New rows inherit the template's format and validation
+in separate requests, retaining dropdowns and nutrition checkboxes. Sheets writes
+use RAW values, so food names and notes cannot become formulas. Unknown nutrients
+remain unknown and partial meal sums are labeled as such inside the comment.
+
+The existing minute scheduler runs an initial synchronization on the next tick
+after a new destination is enabled and verified, then at/after 03:15 in each user's
+timezone at most once per local date. An initial success before 03:15 does not
+consume that day's scheduled run or delay it with the error retry backoff.
+It runs only for enabled, verified destinations
+whose owners still have access. No credentials means no Google calls and no fake
+success. Database leases prevent concurrent exports; retries are date-upserts and
+are delayed at least an hour after failure. Requests are bounded to 1.5 MB/300 rows
+per value batch. This is a personal diary mirror, not an unbounded data warehouse
+(limits: 10,000 diary days, 100,000 meals and 20,000 destination rows).
+
+The UI shows the real connection state and last successful synchronization time.
+Adding a service account or pasting a URL never imports or edits the reference
+spreadsheet. Test a separate, explicitly designated destination before enabling a
+real user's schedule.

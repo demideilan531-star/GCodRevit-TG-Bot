@@ -179,6 +179,16 @@ svg, [data-lucide] { width: 20px; height: 20px; flex: 0 0 20px; stroke-width: 1.
 .reminder .field { margin-bottom: 10px; }
 .reminder:last-child { margin-bottom: 24px; }
 .reminder-name { margin-bottom: 0 !important; }
+.sheet-export-form { border-top: 1px solid var(--line); padding-top: 20px; }
+.sheet-export-toggle { min-height: 44px; margin: -4px 0 16px; }
+.sheet-export-details { display: grid; gap: 12px; margin: 0 0 22px; }
+.sheet-export-details > div { display: grid; gap: 4px; min-width: 0; }
+.sheet-export-details dt { font-size: 11px; color: var(--muted); }
+.sheet-export-details dd { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.sheet-export-details [data-state="error"] { color: var(--coral); }
+.sheet-export-details [data-state="ready"] { color: var(--green); }
+.sheet-service-email { user-select: text; -webkit-user-select: text; cursor: text; }
+.sheet-verification-code { width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--wash); font-size: 16px; font-family: ui-monospace, Consolas, monospace; user-select: text; -webkit-user-select: text; }
 dialog { width: min(calc(100% - 24px), 480px); max-height: calc(100dvh - 32px); padding: 20px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: #fff; overscroll-behavior: contain; }
 dialog::backdrop { background: #171e1a70; }
 .dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 24px; }

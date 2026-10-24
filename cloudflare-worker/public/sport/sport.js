@@ -78,6 +78,24 @@ function toast(message) {
 function errorText(error) { return error instanceof Error ? error.message : "Не удалось выполнить запрос."; }
 function confirmDiscard() { return window.confirm("Есть несохранённые изменения. Отменить их?"); }
 
+function emptySheetExport() {
+  return { spreadsheet_url: "", enabled: false, configured: false, service_email: "", verification_code: null, verified: false, last_sync_at: null, status: "not_configured", error: null };
+}
+
+function sheetDestination(value) {
+  if (!value) throw new Error("Укажите ссылку на копию шаблона.");
+  let url;
+  try { url = new URL(value); } catch { throw new Error("Укажите корректную ссылку Google Sheets."); }
+  const match = url.pathname.match(/^\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,100})(?:\/|$)/);
+  if (url.protocol !== "https:" || url.hostname !== "docs.google.com" || url.port || url.username || url.password || !match) {
+    throw new Error("Нужна ссылка https://docs.google.com/spreadsheets/d/…");
+  }
+  if (match[1] === "1apTYgJfkNRU_Cs_w9p0VtXaA41fM1N0cROG2fhoTjtk") {
+    throw new Error("Исходный шаблон защищён. Укажите ссылку на свою копию.");
+  }
+  return match[1];
+}
+
 const state = {
   today: zonedToday(), selected: zonedToday(), month: zonedToday().slice(0, 7),
   days: new Map(), meals: new Map(), loaded: new Set(), requests: new Map(),
@@ -85,6 +103,7 @@ const state = {
   reminders: [], trainingTypes: Object.keys(trainingLabels), view: "today", period: 7,
   dayBaseline: {}, dayTouched: new Set(), dayBusy: false, navigationBusy: false,
   settingsDirty: false, settingsBusy: false, mealBusy: false, mealDirty: false,
+  sheetExport: emptySheetExport(), sheetExportDirty: false, sheetExportBusy: false,
   mealId: null, mealIsNew: false, dataEpoch: 0, calendarRequest: 0, progressRequest: 0,
 };
 
@@ -117,7 +136,7 @@ function makeDemo() {
       meals.set(id, { id, date, time, title, calories_kcal, protein_g, fat_g, carbs_g, note: "", source_type: "manual", nutrition_source: "manual" });
     }
   }
-  return { today, days, meals, profile: { timezone: "Europe/Moscow", goals: Object.fromEntries(goalKeys.map((key) => [key, null])) }, reminders: [] };
+  return { today, days, meals, profile: { timezone: "Europe/Moscow", goals: Object.fromEntries(goalKeys.map((key) => [key, null])) }, reminders: [], sheet_export: emptySheetExport() };
 }
 const demoStore = demoMode ? makeDemo() : null;
 
@@ -130,7 +149,7 @@ function csvText(rows, keys) {
   return "\ufeff" + [keys, ...rows.map((row) => keys.map((key) => row[key]))].map((row) => row.map(cell).join(";")).join("\r\n");
 }
 
-function demoRequest(path, options) {
+async function demoRequest(path, options) {
   const url = new URL(`/api/sport${path}`, location.origin);
   const method = options.method || "GET";
   const body = options.body ? JSON.parse(options.body) : {};
@@ -150,6 +169,7 @@ function demoRequest(path, options) {
       days: [...demoStore.days.values()].filter((day) => day.date >= from && day.date <= to),
       meals: [...demoStore.meals.values()].filter((meal) => meal.date >= from && meal.date <= to),
       today: demoStore.today, profile: demoStore.profile, reminders: demoStore.reminders, training_types: Object.keys(trainingLabels),
+      sheet_export: demoStore.sheet_export,
     });
   }
   if (url.pathname.includes("/days/") && method === "PUT") {
@@ -162,6 +182,14 @@ function demoRequest(path, options) {
     demoStore.reminders = body.reminders.map((reminder) => ({ ...reminder, id: reminder.id || crypto.randomUUID() }));
     demoStore.today = zonedToday(body.timezone);
     return structuredClone({ profile: demoStore.profile, reminders: demoStore.reminders });
+  }
+  if (url.pathname.endsWith("/sheet-export") && method === "PUT") {
+    const id = sheetDestination(body.spreadsheet_url);
+    if (body.enabled && !demoStore.sheet_export.configured) throw new Error("Google не подключён. Можно сохранить ссылку с выключенной выгрузкой.");
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`sheet-owner:fictional-demo:${id}`)));
+    const verification_code = `GCOD-DEMO-${[...digest.slice(0, 5)].map((value) => value.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+    demoStore.sheet_export = { ...emptySheetExport(), spreadsheet_url: `https://docs.google.com/spreadsheets/d/${id}/edit`, verification_code };
+    return structuredClone({ sheet_export: demoStore.sheet_export });
   }
   if (method === "DELETE") { demoStore.meals.delete(date); return {}; }
   const id = method === "POST" ? body.id : date;
@@ -220,6 +248,7 @@ async function loadRange(from, to, { force = false, metadata = false } = {}) {
       if (result.profile) state.profile = { timezone: result.profile.timezone || browserZone, goals: { ...state.profile.goals, ...result.profile.goals } };
       state.reminders = Array.isArray(result.reminders) ? result.reminders : [];
       state.trainingTypes = Array.isArray(result.training_types) ? result.training_types : Object.keys(trainingLabels);
+      state.sheetExport = { ...emptySheetExport(), ...result.sheet_export };
     }
     return true;
   })();
@@ -767,6 +796,7 @@ async function saveSettings(event) {
     state.reminders = result.reminders;
     state.today = zonedToday(state.profile.timezone);
     renderSettings();
+    renderSheetExportDetails();
     renderDaySummary();
     $("dayRelation").textContent = state.selected === state.today ? "СЕГОДНЯ" : "ДНЕВНИК";
     $("backToday").hidden = state.selected === state.today;
@@ -776,6 +806,69 @@ async function saveSettings(event) {
     state.settingsBusy = false;
     $("settingsFields").disabled = false;
     $("saveSettings").disabled = !state.settingsDirty;
+  }
+}
+
+function renderSheetExportDetails() {
+  const config = state.sheetExport;
+  const labels = { not_configured: "Экспорт не настроен", disabled: "Выгрузка выключена", ready: "Готово к ежедневной выгрузке", error: "Ошибка выгрузки" };
+  const active = config.configured && config.enabled && config.verified;
+  $("sheetExportState").textContent = !config.configured ? "Google не подключён" : config.verification_code && !config.verified ? "Подтверждение доступа" : !config.enabled ? "Выгрузка выключена" : labels[config.status] || "Состояние неизвестно";
+  $("sheetExportState").dataset.state = config.status === "error" ? "error" : active && config.status === "ready" ? "ready" : "";
+  $("sheetExportSchedule").textContent = active ? `Ежедневно в 03:15 · ${state.profile.timezone}` : "Не запланировано";
+  const lastSync = config.last_sync_at ? new Date(config.last_sync_at) : null;
+  $("sheetExportLastSync").textContent = lastSync && Number.isFinite(lastSync.getTime()) ? new Intl.DateTimeFormat("ru-RU", { timeZone: state.profile.timezone, dateStyle: "short", timeStyle: "short" }).format(lastSync) : config.last_sync_at ? "Нет данных" : "Ещё не было";
+  $("sheetServiceEmail").textContent = config.service_email || "";
+  $("sheetServiceRow").hidden = !config.service_email;
+  $("sheetVerificationCode").value = !config.verified ? config.verification_code || "" : "";
+  $("sheetVerificationRow").hidden = config.verified || !config.verification_code;
+  $("sheetExportError").textContent = typeof config.error === "string" ? config.error : "";
+  $("sheetExportError").hidden = !$("sheetExportError").textContent;
+}
+
+function renderSheetExport() {
+  $("sheetExportUrl").value = state.sheetExport.spreadsheet_url;
+  $("sheetExportEnabled").checked = state.sheetExport.enabled;
+  state.sheetExportDirty = false;
+  $("saveSheetExport").disabled = true;
+  status("sheetExportSaveStatus", "Нет изменений");
+  renderSheetExportDetails();
+}
+
+function markSheetExportChanged() {
+  state.sheetExportDirty = $("sheetExportUrl").value.trim() !== state.sheetExport.spreadsheet_url || $("sheetExportEnabled").checked !== state.sheetExport.enabled;
+  $("saveSheetExport").disabled = !state.sheetExportDirty || state.sheetExportBusy || state.navigationBusy;
+  status("sheetExportSaveStatus", state.sheetExportDirty ? "Не сохранено" : "Нет изменений", state.sheetExportDirty ? "dirty" : "");
+}
+
+async function saveSheetExport(event) {
+  event.preventDefault();
+  if (state.sheetExportBusy || state.navigationBusy || !state.sheetExportDirty || !$("sheetExportForm").reportValidity()) return;
+  const body = { spreadsheet_url: $("sheetExportUrl").value.trim(), enabled: $("sheetExportEnabled").checked };
+  try { sheetDestination(body.spreadsheet_url); }
+  catch (error) { status("sheetExportSaveStatus", errorText(error), "error"); return; }
+  state.sheetExportBusy = true;
+  $("sheetExportFields").disabled = true;
+  $("saveSheetExport").disabled = true;
+  status("sheetExportSaveStatus", "Сохранение…");
+  try {
+    const result = await api("/sheet-export", { method: "PUT", body: JSON.stringify(body) });
+    const config = result.sheet_export;
+    if (!config || typeof config.spreadsheet_url !== "string" || typeof config.configured !== "boolean" || typeof config.enabled !== "boolean" || typeof config.verified !== "boolean" ||
+        config.enabled !== body.enabled || (config.enabled && (!config.configured || !config.verified)) ||
+        !["not_configured", "disabled", "ready", "error"].includes(config.status) ||
+        sheetDestination(config.spreadsheet_url) !== sheetDestination(body.spreadsheet_url)) {
+      throw new Error("Нет подтверждения сервера. Повторите сохранение.");
+    }
+    state.dataEpoch++;
+    state.sheetExport = { ...emptySheetExport(), ...config };
+    renderSheetExport();
+    status("sheetExportSaveStatus", demoMode ? "Ссылка сохранена в демо" : "Настройка сохранена на сервере", "saved");
+  } catch (error) { status("sheetExportSaveStatus", errorText(error), "error"); }
+  finally {
+    state.sheetExportBusy = false;
+    $("sheetExportFields").disabled = false;
+    $("saveSheetExport").disabled = !state.sheetExportDirty;
   }
 }
 
@@ -810,18 +903,20 @@ async function showView(view) {
 }
 
 async function refresh() {
-  if (state.dayBusy || state.settingsBusy || state.mealBusy || state.navigationBusy) return;
-  if ((state.dayTouched.size || state.settingsDirty) && !confirmDiscard()) return;
+  if (state.dayBusy || state.settingsBusy || state.mealBusy || state.sheetExportBusy || state.navigationBusy) return;
+  if ((state.dayTouched.size || state.settingsDirty || state.sheetExportDirty) && !confirmDiscard()) return;
   state.navigationBusy = true;
   $("refreshButton").disabled = true;
   $("dayFields").disabled = true;
   $("settingsFields").disabled = true;
+  $("sheetExportFields").disabled = true;
   $("saveDay").disabled = true;
   $("saveSettings").disabled = true;
+  $("saveSheetExport").disabled = true;
   try {
     await loadRange(state.selected, state.selected, { force: true, metadata: true });
     state.loaded.clear(); state.loaded.add(state.selected);
-    renderTraining(); renderDay(); renderSettings();
+    renderTraining(); renderDay(); renderSettings(); renderSheetExport();
     await showView(state.view);
     toast("Данные обновлены");
   } catch (error) { toast(errorText(error)); }
@@ -830,8 +925,10 @@ async function refresh() {
     $("refreshButton").disabled = false;
     $("dayFields").disabled = false;
     $("settingsFields").disabled = false;
+    $("sheetExportFields").disabled = false;
     $("saveDay").disabled = !state.dayTouched.size;
     $("saveSettings").disabled = !state.settingsDirty;
+    $("saveSheetExport").disabled = !state.sheetExportDirty;
   }
 }
 
@@ -874,6 +971,9 @@ function bindEvents() {
   $("settingsForm").addEventListener("input", markSettingsChanged);
   $("settingsForm").addEventListener("change", markSettingsChanged);
   $("settingsForm").addEventListener("submit", saveSettings);
+  $("sheetExportForm").addEventListener("input", markSheetExportChanged);
+  $("sheetExportForm").addEventListener("change", markSheetExportChanged);
+  $("sheetExportForm").addEventListener("submit", saveSheetExport);
   $("addReminder").addEventListener("click", () => {
     const rows = [...$("reminderList").querySelectorAll(".reminder")];
     if (rows.length >= 16) { toast("Не больше 16 напоминаний"); return; }
@@ -885,10 +985,10 @@ function bindEvents() {
   $("refreshButton").addEventListener("click", refresh);
   $("retryButton").addEventListener("click", boot);
   window.addEventListener("beforeunload", (event) => {
-    if (state.dayTouched.size || state.settingsDirty || state.mealDirty || state.dayBusy || state.settingsBusy || state.mealBusy) { event.preventDefault(); event.returnValue = ""; }
+    if (state.dayTouched.size || state.settingsDirty || state.sheetExportDirty || state.mealDirty || state.dayBusy || state.settingsBusy || state.sheetExportBusy || state.mealBusy) { event.preventDefault(); event.returnValue = ""; }
   });
   for (const link of document.querySelectorAll(".product-switch a")) link.addEventListener("click", (event) => {
-    if ((state.dayTouched.size || state.settingsDirty || state.mealDirty) && !confirmDiscard()) event.preventDefault();
+    if ((state.dayTouched.size || state.settingsDirty || state.sheetExportDirty || state.mealDirty) && !confirmDiscard()) event.preventDefault();
   });
 }
 
@@ -904,7 +1004,7 @@ async function boot() {
     state.month = state.today.slice(0, 7);
     await loadRange(state.selected, state.selected);
     $("progressEnd").value = state.today;
-    renderTraining(); renderDay(); renderSettings(true);
+    renderTraining(); renderDay(); renderSettings(true); renderSheetExport();
     $("mainContent").hidden = false;
     $("bottomNav").hidden = false;
     $("refreshButton").disabled = false;

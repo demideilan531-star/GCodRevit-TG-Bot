@@ -1,5 +1,6 @@
 import { getAssistantAccess } from './access.js';
 import { validateTelegramInitData } from './tasks.js';
+import { getSheetExportConfig, saveSheetExportConfig } from './sport-sheets.js';
 
 export const SPORT_CRON = '* * * * *';
 export const TRAINING_TYPES = ['rest', 'strength', 'cardio', 'stretch', 'other'];
@@ -260,11 +261,12 @@ export async function handleSportApi(request, env) {
         return new Response(csv, { headers: { 'Content-Type': 'text/csv;charset=utf-8', 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="sport-${mealExport ? 'meals' : 'days'}-${from}-${to}.csv"`, 'X-Content-Type-Options': 'nosniff' } });
       }
       const reminders = ((await db.prepare('SELECT id, kind, time, label, enabled FROM sport_reminders WHERE owner_id = ? ORDER BY time').bind(owner).all()).results || []).map(r => ({ ...r, enabled: Boolean(r.enabled) }));
-      return json({ days, meals, profile, reminders, today, training_types: TRAINING_TYPES });
+      return json({ days, meals, profile, reminders, today, training_types: TRAINING_TYPES, sheet_export: await getSheetExportConfig(db, owner, env) });
     }
     const day = suffix.match(/^\/days\/(20\d{2}-\d{2}-\d{2})$/);
     if (request.method === 'PUT' && day) return json({ day: await saveDay(db, owner, day[1], await bodyJson(request)) });
     if (request.method === 'PUT' && suffix === '/settings') return json(await saveSettings(db, owner, await bodyJson(request)));
+    if (request.method === 'PUT' && suffix === '/sheet-export') return json({ sheet_export: await saveSheetExportConfig(db, owner, env, await bodyJson(request)) });
     if (request.method === 'POST' && suffix === '/meals') return json({ meal: await saveMeal(db, owner, await bodyJson(request)) }, 201);
     const meal = suffix.match(/^\/meals\/([a-zA-Z0-9_-]{8,80})$/);
     if (meal && ['PATCH', 'DELETE'].includes(request.method)) {
