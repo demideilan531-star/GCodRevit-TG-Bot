@@ -10,6 +10,7 @@ import {
   saveSheetExportConfig,
 } from "../cloudflare-worker/src/sport-sheets.js";
 import { handleSportApi } from "../cloudflare-worker/src/sport.js";
+import worker from "../cloudflare-worker/src/index.js";
 import {
   BLOCKED_OWNER,
   createSportFixture,
@@ -26,6 +27,7 @@ const DAY = "2026-10-23";
 const NOW = "2026-10-24T00:15:00.000Z";
 const HEADERS = ["Дата", "Вес (кг)", "Сон (ч)", "Вода (л)", "Шаги", "Тренировка", "Питание в норме?", "Настроение / Стресс", "Комментарий клиента", "Заметка тренера"];
 const TABS = ["Дневник (Ежедневно)", "Дашборд и Аналитика", "Справочник и Цели"];
+const CANONICAL_TRAINING = ["Отдых", "Силовая", "Кардио", "Растяжка / МФР", "Другое"];
 const OTHER_DESTINATION_ID = "fictional_owned_destination_810002";
 const sheetUrl = (id = DESTINATION_ID) => `https://docs.google.com/spreadsheets/d/${id}/edit`;
 const serialDate = date => (Date.parse(`${date}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86400000;
@@ -58,7 +60,7 @@ function sheetState(extra = {}) {
 }
 
 function mockGoogle(t, destinations = new Map([[DESTINATION_ID, sheetState()]])) {
-  const calls = [], writes = [], layout = [], oauth = [];
+  const calls = [], writes = [], layout = [], oauth = [], validationViolations = [];
   t.mock.method(globalThis, "fetch", async (input, options = {}) => {
     const url = new URL(String(input)), method = options.method || "GET";
     assert.ok(!url.href.includes(REFERENCE_ID), "the protected reference must never receive API traffic");
@@ -111,6 +113,13 @@ function mockGoogle(t, destinations = new Map([[DESTINATION_ID, sheetState()]]))
         assert.equal(range[1], range[2]);
         assert.equal(update.values.length, 1);
         assert.equal(update.values[0].length, 10);
+        const rowIndex = Number(range[1]) - 1;
+        for (const [column, value] of update.values[0].entries()) {
+          const rule = state.validationRules?.[`${rowIndex}:${column}`];
+          if (value !== "" && rule?.condition?.type === "ONE_OF_LIST" && !rule.condition.values.some(item => item.userEnteredValue === value)) {
+            validationViolations.push({ row: rowIndex + 1, column: column + 1, value });
+          }
+        }
         state.values[Number(range[1]) - 1] = [...update.values[0]];
       }
       if (state.onWrite) await state.onWrite();
@@ -118,14 +127,41 @@ function mockGoogle(t, destinations = new Map([[DESTINATION_ID, sheetState()]]))
     }
     if (method === "POST" && suffix === ":batchUpdate") {
       layout.push({ id, body });
+      if (state.onLayout) await state.onLayout({ id, body });
+      if (state.layoutStatus) return Response.json({ error: { message: "fictional editor access denied" } }, { status: state.layoutStatus });
       for (const request of body.requests) {
         if (request.appendDimension?.dimension === "ROWS") state.gridRows += request.appendDimension.length;
+        // Sheets PASTE_FORMAT explicitly excludes validation; copy it only when requested.
+        const copy = request.copyPaste;
+        if (copy?.pasteType === "PASTE_DATA_VALIDATION") {
+          const { source, destination } = copy, rules = structuredClone(state.validationRules || {});
+          state.validationRules ||= {};
+          for (let row = destination.startRowIndex; row < destination.endRowIndex; row++) {
+            for (let column = destination.startColumnIndex; column < destination.endColumnIndex; column++) {
+              const sourceRow = source.startRowIndex + (row - destination.startRowIndex) % (source.endRowIndex - source.startRowIndex);
+              const sourceColumn = source.startColumnIndex + (column - destination.startColumnIndex) % (source.endColumnIndex - source.startColumnIndex);
+              const rule = rules[`${sourceRow}:${sourceColumn}`], key = `${row}:${column}`;
+              if (rule) state.validationRules[key] = structuredClone(rule);
+              else delete state.validationRules[key];
+            }
+          }
+        }
+        if (request.setDataValidation) {
+          const { range, rule } = request.setDataValidation;
+          state.validationRules ||= {};
+          for (let row = range.startRowIndex; row < range.endRowIndex; row++) {
+            for (let column = range.startColumnIndex; column < range.endColumnIndex; column++) {
+              if (rule) state.validationRules[`${row}:${column}`] = structuredClone(rule);
+              else delete state.validationRules[`${row}:${column}`];
+            }
+          }
+        }
       }
       return Response.json({ replies: body.requests.map(() => ({})) });
     }
     assert.fail(`unexpected Google operation: ${method} ${suffix}`);
   });
-  return { calls, writes, layout, oauth, destinations };
+  return { calls, writes, layout, oauth, destinations, validationViolations };
 }
 
 async function api(f, path, options = {}, status = 200) {
@@ -381,14 +417,23 @@ test("enabling requires the owner's verification code in the spreadsheet title, 
   assert.equal(google.calls.length, 0);
   await assert.rejects(saveSheetExportConfig(f.db, OWNER, f.env, { ...input, enabled: true }), error => error.message.includes(disabled.verification_code));
   assert.equal((await getSheetExportConfig(f.db, OWNER, f.env)).enabled, false);
+  assert.equal(google.layout.length, 0, "an unverified title must not receive even the F-column setup write");
+  assert.equal(google.writes.length, 0);
+  state.title = "Fictional personal diary GCOD-WRONGCODE";
+  await assert.rejects(saveSheetExportConfig(f.db, OWNER, f.env, { ...input, enabled: true }), error => error.message.includes(disabled.verification_code));
+  assert.equal(google.layout.length, 0);
   state.title = `Fictional personal diary ${disabled.verification_code}`;
   const enabled = await saveSheetExportConfig(f.db, OWNER, f.env, { ...input, enabled: true });
   assert.equal(enabled.verified, true);
   assert.equal(enabled.service_email, account.client_email);
   assert.equal(enabled.configured, true);
-  assert.ok(google.calls.every(call => call.method === "GET"));
+  assert.ok(google.calls.every(call => call.method === "GET" || call.suffix === ":batchUpdate"));
   assert.equal(google.writes.length, 0);
-  assert.equal(google.layout.length, 0);
+  assert.equal(google.layout.length, 1);
+  assert.deepEqual(google.layout[0].body.requests, [{ setDataValidation: {
+    range: { sheetId: 0, startRowIndex: 1, endRowIndex: state.gridRows, startColumnIndex: 5, endColumnIndex: 6 },
+    rule: { condition: { type: "ONE_OF_LIST", values: CANONICAL_TRAINING.map(userEnteredValue => ({ userEnteredValue })) }, strict: true, showCustomUi: true },
+  } }]);
   assert.equal(google.oauth.length, 1);
   assert.equal(google.oauth[0].iss, account.client_email);
   assert.doesNotMatch(JSON.stringify(enabled), /BEGIN PRIVATE KEY|private_key|access_token|fictional-private-key-id/);
@@ -510,9 +555,10 @@ test("exports within existing capacity never clear, delete or change existing fo
   const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
   await api(f, `/days/${DAY}`, { method: "PUT", body: { steps: 8500 } });
   await verifiedConfig(f, state);
+  const exportLayoutStart = google.layout.length, exportCallStart = google.calls.length;
   assert.equal(await runSportSheetExports(cron(), f.env), 1);
-  assert.deepEqual(google.layout, [], "values-only export must not call spreadsheets:batchUpdate, including repeatCell");
-  assert.ok(google.calls.every(call => call.method === "GET" || call.suffix === "/values:batchUpdate"));
+  assert.deepEqual(google.layout.slice(exportLayoutStart), [], "values-only export must not call spreadsheets:batchUpdate, including repeatCell");
+  assert.ok(google.calls.slice(exportCallStart).every(call => call.method === "GET" || call.suffix === "/values:batchUpdate"));
   assert.deepEqual(state.values[0], HEADERS);
 });
 
@@ -526,29 +572,42 @@ test("full diary capacity appends rows and copies only template A:J formatting o
   const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
   await api(f, `/days/${DAY}`, { method: "PUT", body: { steps: 8500 } });
   await verifiedConfig(f, state);
+  const exportLayoutStart = google.layout.length;
   assert.equal(await runSportSheetExports(cron(), f.env), 1);
-  assert.equal(google.layout.length, 1);
-  assert.deepEqual(google.layout[0].body.requests, [
-    { appendDimension: { sheetId: 0, dimension: "ROWS", length: 1 } },
-    { copyPaste: {
-      source: { sheetId: 0, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 10 },
-      destination: { sheetId: 0, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 10 },
-      pasteType: "PASTE_FORMAT",
-    } },
-  ]);
+  assert.equal(google.layout.length, exportLayoutStart + 1);
+  const requests = google.layout[exportLayoutStart].body.requests;
+  assert.deepEqual(requests[0], { appendDimension: { sheetId: 0, dimension: "ROWS", length: 1 } });
+  assert.ok(requests.some(request => request.copyPaste?.pasteType === "PASTE_FORMAT"));
+  assert.ok(requests.some(request => request.copyPaste?.pasteType === "PASTE_DATA_VALIDATION"));
+  for (const request of requests.slice(1)) {
+    if (request.copyPaste) {
+      assert.ok(["PASTE_FORMAT", "PASTE_DATA_VALIDATION"].includes(request.copyPaste.pasteType));
+      assert.deepEqual(request.copyPaste.source, { sheetId: 0, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 10 });
+      assert.deepEqual(request.copyPaste.destination, { sheetId: 0, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 10 });
+    } else {
+      assert.ok(request.setDataValidation, "only formatting and validation of added rows may be copied");
+      const range = request.setDataValidation.range;
+      assert.equal(range.sheetId, 0);
+      assert.equal(range.startRowIndex, 2);
+      assert.equal(range.endRowIndex, 3);
+      assert.ok(range.startColumnIndex >= 0 && range.endColumnIndex <= 10);
+    }
+  }
   assert.equal(state.gridRows, 3);
   assert.deepEqual(state.values[1], existing);
   assert.deepEqual(google.writes.flatMap(write => write.body.data.map(entry => entry.range)), ["'Дневник (Ежедневно)'!A3:J3"]);
   assert.equal(state.values[2][0], serialDate(DAY));
 });
 
-test("the scheduler runs once per local date starting at 03:15, not UTC midnight", async (t) => {
+test("the regular daily scheduler with a previous success waits until local 03:15, not UTC midnight", async (t) => {
   freezeTime(t, "2026-10-23T21:29:00Z");
   const f = createSportFixture(t), state = sheetState();
   serviceAccount(f);
   seedProfile(f, OWNER, "Asia/Kathmandu");
   const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
   await verifiedConfig(f, state);
+  f.sqlite.prepare("UPDATE sport_sheet_exports SET last_sync_at=?,last_sync_date=? WHERE owner_id=?")
+    .run("2026-10-22T21:30:00.000Z", "2026-10-23", OWNER);
   const reads = google.calls.length;
   assert.equal(await runSportSheetExports(cron("2026-10-23T21:29:00Z"), f.env), 0);
   assert.equal(google.calls.length, reads);
@@ -588,18 +647,19 @@ test("export revalidates exact headers and tab names before any outbound writes"
   const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
   await api(f, `/days/${DAY}`, { method: "PUT", body: { steps: 8500 } });
   await verifiedConfig(f, state);
+  const exportLayoutStart = google.layout.length;
   state.values[0][9] = "Changed trainer header";
   assert.equal(await runSportSheetExports(cron(), f.env), 0);
   assert.equal(f.sqlite.prepare("SELECT error_code FROM sport_sheet_exports WHERE owner_id=?").get(OWNER).error_code, "template");
   assert.equal(google.writes.length, 0);
-  assert.equal(google.layout.length, 0);
+  assert.equal(google.layout.length, exportLayoutStart);
   state.values[0] = [...HEADERS];
   state.tabs = [TABS[0], TABS[2]];
   const later = "2026-10-24T01:15:01Z";
   t.mock.timers.setTime(Date.parse(later));
   assert.equal(await runSportSheetExports(cron(later), f.env), 0);
   assert.equal(google.writes.length, 0);
-  assert.equal(google.layout.length, 0);
+  assert.equal(google.layout.length, exportLayoutStart);
 });
 
 test("a legacy stored reference destination is blocked before OAuth or Sheets requests", async (t) => {
@@ -640,13 +700,14 @@ test("goal sync writes only reference B2:B5 and leaves dashboard and unrelated f
   const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
   await api(f, `/days/${DAY}`, { method: "PUT", body: { steps: 8500 } });
   await verifiedConfig(f, state);
+  const exportLayoutStart = google.layout.length;
   assert.equal(await runSportSheetExports(cron(), f.env), 1);
   assert.deepEqual(google.writes.flatMap(write => write.body.data.map(entry => entry.range)), [
     "'Дневник (Ежедневно)'!A2:J2", "'Справочник и Цели'!B2", "'Справочник и Цели'!B3", "'Справочник и Цели'!B4", "'Справочник и Цели'!B5",
   ]);
   assert.deepEqual(state.goalCells, { B1: "Fictional heading", B2: 7.5, B3: 8500, B4: 1.75, B5: 71.5, B6: "=SUM(B2:B5)" });
   assert.deepEqual(state.dashboardFormulas, formulas);
-  assert.deepEqual(google.layout, []);
+  assert.deepEqual(google.layout.slice(exportLayoutStart), []);
   assert.ok(google.writes.every(write => write.body.valueInputOption === "RAW"));
 });
 
@@ -659,12 +720,13 @@ test("switching destination while an export is reading cancels its stale lease b
   t.mock.method(console, "error", () => {});
   await api(f, `/days/${DAY}`, { method: "PUT", body: { steps: 8500 } });
   await verifiedConfig(f, state);
+  const exportLayoutStart = google.layout.length;
   state.onValuesRead = async () => {
     await saveSheetExportConfig(f.db, OWNER, f.env, { spreadsheet_url: sheetUrl(OTHER_DESTINATION_ID), enabled: false });
   };
   assert.equal(await runSportSheetExports(cron(), f.env), 0);
   assert.equal(google.writes.length, 0);
-  assert.equal(google.layout.length, 0);
+  assert.equal(google.layout.length, exportLayoutStart);
   const config = f.sqlite.prepare("SELECT * FROM sport_sheet_exports WHERE owner_id=?").get(OWNER);
   assert.equal(config.spreadsheet_id, OTHER_DESTINATION_ID);
   assert.equal(config.enabled, 0);
@@ -683,6 +745,7 @@ for (const [name, count, dense] of [["300-row cap", 350, false], ["UTF-8 byte ca
     const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
     seedManyDays(f, count, { dense });
     await verifiedConfig(f, state);
+    const exportLayoutStart = google.layout.length;
     assert.equal(await runSportSheetExports(cron(), f.env), 1);
     assert.ok(google.writes.length >= 2);
     assert.equal(google.writes.reduce((total, write) => total + write.body.data.length, 0), count);
@@ -693,7 +756,7 @@ for (const [name, count, dense] of [["300-row cap", 350, false], ["UTF-8 byte ca
       assert.ok(write.body.data.every(entry => entry.values[0].length === 10 && typeof entry.values[0][0] === "number"));
     }
     assert.equal(state.values.length, count + 1);
-    assert.equal(google.layout.length, 0);
+    assert.equal(google.layout.length, exportLayoutStart);
     if (dense) {
       assert.equal(state.values[1][8], "Я".repeat(2000));
       assert.equal(state.values[1][9], "Ж".repeat(2000));
@@ -771,3 +834,356 @@ test("failed exports back off for an hour, then can retry without disabling the 
   assert.equal(row.enabled, 1);
   assert.equal(row.last_sync_date, "2026-10-24");
 });
+
+function sampleValidationRules(rows = [1, 2, 3]) {
+  const rules = {};
+  const choices = values => ({ condition: { type: "ONE_OF_LIST", values: values.map(userEnteredValue => ({ userEnteredValue })) }, strict: true, showCustomUi: true });
+  for (const row of rows) {
+    rules[`${row}:5`] = choices(["Отдых", "Силовая", "Кардио"]);
+    rules[`${row}:6`] = { condition: { type: "BOOLEAN" }, strict: true, showCustomUi: true };
+    rules[`${row}:7`] = choices(["1 - Ужасно", "2 - Плохо", "3 - Норма", "4 - Хорошо", "5 - Отлично"]);
+  }
+  return rules;
+}
+
+test("setup normalizes the destination's three-option training validation before exporting all five types", async (t) => {
+  freezeTime(t);
+  const f = createSportFixture(t), state = sheetState({ validationRules: sampleValidationRules() });
+  serviceAccount(f);
+  seedProfile(f);
+  const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+  await api(f, `/days/${DAY}`, { method: "PUT", body: { training: "stretch", mood: 4 } });
+  await api(f, "/days/2026-10-22", { method: "PUT", body: { training: "other", mood: 5 } });
+  await verifiedConfig(f, state);
+  assert.equal(await runSportSheetExports(cron(), f.env), 1);
+  assert.deepEqual(google.validationViolations, [], "an enabled export must not write accepted training values outside the destination dropdown");
+});
+
+test("added diary rows retain template training, nutrition and mood validation", async (t) => {
+  freezeTime(t);
+  const existing = [serialDate("2026-10-22"), 80, 8, 2, 1000, "Отдых", true, "3 - Норма", "Fictional existing row", "Fictional trainer note"];
+  const rules = sampleValidationRules([1]);
+  const f = createSportFixture(t), state = sheetState({ gridRows: 2, values: [[...HEADERS], [...existing]], validationRules: rules });
+  serviceAccount(f);
+  seedProfile(f);
+  mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+  await api(f, `/days/${DAY}`, { method: "PUT", body: { training: "rest", nutrition: false, mood: 4 } });
+  await verifiedConfig(f, state);
+  const before = structuredClone(state.validationRules);
+  assert.deepEqual(before["1:5"].condition.values.map(item => item.userEnteredValue), CANONICAL_TRAINING);
+  assert.equal(await runSportSheetExports(cron(), f.env), 1);
+  assert.deepEqual(Object.fromEntries([5, 6, 7].map(column => [column, state.validationRules[`2:${column}`]])),
+    Object.fromEntries([5, 6, 7].map(column => [column, before[`1:${column}`]])),
+    "PASTE_FORMAT alone excludes data validation and cannot reproduce the original row controls");
+  assert.deepEqual(Object.fromEntries([5, 6, 7].map(column => [column, state.validationRules[`1:${column}`]])),
+    Object.fromEntries([5, 6, 7].map(column => [column, before[`1:${column}`]])));
+  assert.deepEqual(state.values[1], existing);
+});
+
+test("exact three-tab destination contract rejects an additional tab", async (t) => {
+  const f = createSportFixture(t), state = sheetState({ tabs: [...TABS, "Fictional additional tab"] });
+  serviceAccount(f);
+  mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+  const input = { spreadsheet_url: DESTINATION_URL, enabled: false };
+  const disabled = await saveSheetExportConfig(f.db, OWNER, f.env, input);
+  state.title += ` ${disabled.verification_code}`;
+  await assert.rejects(saveSheetExportConfig(f.db, OWNER, f.env, { ...input, enabled: true }), { code: "template" });
+  assert.equal((await getSheetExportConfig(f.db, OWNER, f.env)).enabled, false);
+});
+
+test("verified setup changes only F2:FrowCount validation and leaves all values, other rules and formulas unchanged", async (t) => {
+  freezeTime(t);
+  const originalRules = sampleValidationRules();
+  originalRules["0:5"] = { condition: { type: "ONE_OF_LIST", values: [{ userEnteredValue: "Fictional header rule" }] }, strict: false };
+  originalRules["1:1"] = { condition: { type: "NUMBER_GREATER", values: [{ userEnteredValue: "0" }] }, strict: true };
+  const state = sheetState({
+    tabs: [TABS[2], TABS[1], TABS[0]], gridRows: 4,
+    values: [[...HEADERS], ...["2026-10-20", "2026-10-21", "2026-10-22"].map(date => [serialDate(date), 71.5, 7.5, 1.75, 8500, "Силовая", true, "4 - Хорошо", "Fictional original comment", "Fictional original trainer note"])],
+    validationRules: structuredClone(originalRules),
+    goalCells: { B2: 8, B3: 8000, B4: 2, B5: 70, B6: "=SUM(B2:B5)" },
+    dashboardFormulas: { A1: "=COUNT('Дневник (Ежедневно)'!A:A)", A2: "=AVERAGEIFS('Дневник (Ежедневно)'!B:B;'Дневник (Ежедневно)'!A:A;A3)" },
+  });
+  const before = structuredClone({ values: state.values, goals: state.goalCells, dashboard: state.dashboardFormulas });
+  const f = createSportFixture(t);
+  serviceAccount(f);
+  const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+  const input = { spreadsheet_url: DESTINATION_URL, enabled: false };
+  const disabled = await saveSheetExportConfig(f.db, OWNER, f.env, input);
+  state.title += ` ${disabled.verification_code}`;
+  let checkedBeforeReady = false;
+  state.onLayout = async () => {
+    const inFlight = await getSheetExportConfig(f.db, OWNER, f.env);
+    assert.equal(inFlight.enabled, false);
+    assert.equal(inFlight.verified, false);
+    assert.notEqual(inFlight.status, "ready");
+    assert.ok(state.title.includes(inFlight.verification_code));
+    checkedBeforeReady = true;
+  };
+  const enabled = await saveSheetExportConfig(f.db, OWNER, f.env, { ...input, enabled: true });
+  assert.equal(checkedBeforeReady, true);
+  assert.equal(enabled.status, "ready");
+  const metadataFields = new URL(google.calls.find(call => call.method === "GET" && call.suffix === "").url).searchParams.get("fields");
+  assert.ok(metadataFields.includes("sheetId") && metadataFields.includes("rowCount"));
+  const rule = { condition: { type: "ONE_OF_LIST", values: CANONICAL_TRAINING.map(userEnteredValue => ({ userEnteredValue })) }, strict: true, showCustomUi: true };
+  assert.deepEqual(google.layout, [{ id: DESTINATION_ID, body: { requests: [{ setDataValidation: {
+    range: { sheetId: 2, startRowIndex: 1, endRowIndex: 4, startColumnIndex: 5, endColumnIndex: 6 }, rule,
+  } }] } }]);
+  const expectedRules = structuredClone(originalRules);
+  for (const row of [1, 2, 3]) expectedRules[`${row}:5`] = structuredClone(rule);
+  assert.deepEqual(state.validationRules, expectedRules);
+  assert.deepEqual({ values: state.values, goals: state.goalCells, dashboard: state.dashboardFormulas }, before);
+  assert.equal(google.writes.length, 0);
+  assert.equal(state.gridRows, 4);
+});
+
+test("disabled saves never normalize validation, including after a verified connection", async (t) => {
+  const f = createSportFixture(t), state = sheetState({ gridRows: 4, validationRules: sampleValidationRules() });
+  serviceAccount(f);
+  const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+  const input = { spreadsheet_url: DESTINATION_URL, enabled: false };
+  const originalRules = structuredClone(state.validationRules);
+  const disabled = await saveSheetExportConfig(f.db, OWNER, f.env, input);
+  state.title += ` ${disabled.verification_code}`;
+  await saveSheetExportConfig(f.db, OWNER, f.env, input);
+  assert.equal(google.calls.length, 0);
+  assert.equal(google.layout.length, 0);
+  assert.deepEqual(state.validationRules, originalRules);
+  await saveSheetExportConfig(f.db, OWNER, f.env, { ...input, enabled: true });
+  const calls = google.calls.length, layouts = google.layout.length, normalized = structuredClone(state.validationRules);
+  const turnedOff = await saveSheetExportConfig(f.db, OWNER, f.env, input);
+  assert.equal(turnedOff.enabled, false);
+  assert.equal(turnedOff.verified, true);
+  assert.equal(google.calls.length, calls);
+  assert.equal(google.layout.length, layouts);
+  assert.deepEqual(state.validationRules, normalized);
+});
+
+test("read-only Google access cannot mark a proof-verified destination ready when F validation setup is denied", async (t) => {
+  freezeTime(t);
+  const f = createSportFixture(t), state = sheetState({ gridRows: 4, validationRules: sampleValidationRules(), layoutStatus: 403 });
+  serviceAccount(f);
+  const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+  const input = { spreadsheet_url: DESTINATION_URL, enabled: false };
+  const disabled = await saveSheetExportConfig(f.db, OWNER, f.env, input);
+  state.title += ` ${disabled.verification_code}`;
+  const before = structuredClone(state.validationRules);
+  await assert.rejects(saveSheetExportConfig(f.db, OWNER, f.env, { ...input, enabled: true }), { code: "google_access" });
+  const failed = await getSheetExportConfig(f.db, OWNER, f.env);
+  assert.equal(failed.enabled, false);
+  assert.equal(failed.verified, false);
+  assert.notEqual(failed.status, "ready");
+  assert.equal(f.sqlite.prepare("SELECT verified_at FROM sport_sheet_exports WHERE owner_id=?").get(OWNER).verified_at, null);
+  assert.equal(google.layout.length, 1);
+  assert.equal(google.writes.length, 0);
+  assert.deepEqual(state.validationRules, before);
+  delete state.layoutStatus;
+  const retried = await saveSheetExportConfig(f.db, OWNER, f.env, { ...input, enabled: true });
+  assert.equal(retried.status, "ready");
+  assert.equal(retried.enabled, true);
+  assert.equal(retried.verified, true);
+});
+
+test("the minute Worker cron performs one early initial sync and still runs the local 03:15 schedule without an hour delay", async (t) => {
+  const early = "2026-10-24T00:00:00.000Z", scheduled = "2026-10-24T00:15:00.000Z";
+  freezeTime(t, early);
+  const f = createSportFixture(t), state = sheetState();
+  serviceAccount(f);
+  const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+  await api(f, `/days/${DAY}`, { method: "PUT", body: { steps: 8500, nutrition: false } });
+  await verifiedConfig(f, state);
+  const ctx = { waitUntil() { assert.fail("Sheet synchronization must not dispatch unrelated background jobs"); } };
+  await Promise.all([worker.scheduled(cron(early), f.env, ctx), worker.scheduled(cron(early), f.env, ctx)]);
+  const initial = f.sqlite.prepare("SELECT * FROM sport_sheet_exports WHERE owner_id=?").get(OWNER);
+  assert.equal(initial.last_sync_at, early);
+  assert.equal(initial.last_sync_date, null);
+  assert.equal(initial.last_attempt_at, early);
+  assert.equal(initial.error_code, null);
+  assert.equal(initial.lease_token, null);
+  assert.equal(initial.lease_until, null);
+  assert.equal(google.writes.length, 1);
+  const calls = google.calls.length;
+  for (const time of [early, "2026-10-24T00:01:00.000Z", "2026-10-24T00:14:00.000Z"]) {
+    t.mock.timers.setTime(Date.parse(time));
+    assert.equal(await runSportSheetExports(cron(time), f.env), 0);
+    assert.equal(google.calls.length, calls);
+  }
+  t.mock.timers.setTime(Date.parse(scheduled));
+  assert.equal(await runSportSheetExports(cron(scheduled), f.env), 1);
+  const daily = f.sqlite.prepare("SELECT * FROM sport_sheet_exports WHERE owner_id=?").get(OWNER);
+  assert.equal(daily.last_sync_at, scheduled);
+  assert.equal(daily.last_sync_date, "2026-10-24");
+  assert.equal(daily.error_code, null);
+  assert.equal(google.writes.length, 2);
+  assert.equal(state.values.length, 2, "the scheduled sync must upsert the same date rather than duplicate the initial export");
+  assert.equal(state.values[1][0], serialDate(DAY));
+  const afterDaily = google.calls.length;
+  assert.equal(await runSportSheetExports(cron("2026-10-24T00:16:00Z"), f.env), 0);
+  assert.equal(google.calls.length, afterDaily);
+});
+
+test("an initial failure obeys an hour backoff even across 03:15, then retries without a false earlier success", async (t) => {
+  const first = "2026-10-23T23:45:00.000Z";
+  freezeTime(t, first);
+  const f = createSportFixture(t), state = sheetState();
+  serviceAccount(f);
+  const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+  t.mock.method(console, "error", () => {});
+  await verifiedConfig(f, state);
+  state.status = 403;
+  assert.equal(await runSportSheetExports(cron(first), f.env), 0);
+  const failed = f.sqlite.prepare("SELECT * FROM sport_sheet_exports WHERE owner_id=?").get(OWNER);
+  assert.equal(failed.last_sync_at, null);
+  assert.equal(failed.last_sync_date, null);
+  assert.equal(failed.last_attempt_at, first);
+  assert.equal(failed.error_code, "google_access");
+  assert.equal(failed.lease_token, null);
+  assert.equal(failed.lease_until, null);
+  const calls = google.calls.length;
+  delete state.status;
+  for (const time of ["2026-10-23T23:46:00Z", "2026-10-24T00:15:00Z", "2026-10-24T00:44:59Z"]) {
+    t.mock.timers.setTime(Date.parse(time));
+    assert.equal(await runSportSheetExports(cron(time), f.env), 0);
+    assert.equal(google.calls.length, calls);
+  }
+  const retry = "2026-10-24T00:45:00.000Z";
+  t.mock.timers.setTime(Date.parse(retry));
+  assert.equal(await runSportSheetExports(cron(retry), f.env), 1);
+  const success = f.sqlite.prepare("SELECT * FROM sport_sheet_exports WHERE owner_id=?").get(OWNER);
+  assert.equal(success.last_sync_at, retry);
+  assert.equal(success.last_sync_date, "2026-10-24");
+  assert.equal(success.error_code, null);
+  assert.equal(success.enabled, 1);
+});
+
+for (const time of ["2026-10-24T00:15:00.000Z", "2026-10-24T00:30:00.000Z"]) {
+  test(`an initial sync at or after local 03:15 completes that day's schedule exactly once: ${time}`, async (t) => {
+    freezeTime(t, time);
+    const f = createSportFixture(t), state = sheetState();
+    serviceAccount(f);
+    const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+    await verifiedConfig(f, state);
+    assert.equal(await runSportSheetExports(cron(time), f.env), 1);
+    const row = f.sqlite.prepare("SELECT * FROM sport_sheet_exports WHERE owner_id=?").get(OWNER);
+    assert.equal(row.last_sync_at, time);
+    assert.equal(row.last_sync_date, "2026-10-24");
+    const calls = google.calls.length;
+    assert.equal(await runSportSheetExports(cron(time), f.env), 0);
+    assert.equal(await runSportSheetExports(cron("2026-10-24T10:00:00Z"), f.env), 0);
+    assert.equal(google.calls.length, calls);
+    const nextDay = "2026-10-25T00:15:00.000Z";
+    t.mock.timers.setTime(Date.parse(nextDay));
+    assert.equal(await runSportSheetExports(cron(nextDay), f.env), 1);
+    assert.equal(f.sqlite.prepare("SELECT last_sync_date FROM sport_sheet_exports WHERE owner_id=?").get(OWNER).last_sync_date, "2026-10-25");
+  });
+}
+
+test("changing the destination starts a new early initial sync without reusing the old success or waiting an hour", async (t) => {
+  const first = "2026-10-23T23:50:00.000Z", changed = "2026-10-24T00:05:00.000Z";
+  freezeTime(t, first);
+  const f = createSportFixture(t), original = sheetState(), replacement = sheetState();
+  serviceAccount(f);
+  const google = mockGoogle(t, new Map([[DESTINATION_ID, original], [OTHER_DESTINATION_ID, replacement]]));
+  await api(f, `/days/${DAY}`, { method: "PUT", body: { steps: 8500 } });
+  await verifiedConfig(f, original);
+  assert.equal(await runSportSheetExports(cron(first), f.env), 1);
+  const oldValues = structuredClone(original.values);
+  t.mock.timers.setTime(Date.parse(changed));
+  await verifiedConfig(f, replacement, OWNER, OTHER_DESTINATION_ID);
+  const pending = f.sqlite.prepare("SELECT * FROM sport_sheet_exports WHERE owner_id=?").get(OWNER);
+  assert.equal(pending.last_sync_at, null);
+  assert.equal(pending.last_sync_date, null);
+  assert.equal(pending.error_code, null);
+  assert.equal(pending.lease_token, null);
+  assert.equal(await runSportSheetExports(cron(changed), f.env), 1);
+  assert.deepEqual(google.writes.map(write => write.id), [DESTINATION_ID, OTHER_DESTINATION_ID]);
+  assert.deepEqual(original.values, oldValues);
+  assert.deepEqual(replacement.values, oldValues);
+  const completed = f.sqlite.prepare("SELECT * FROM sport_sheet_exports WHERE owner_id=?").get(OWNER);
+  assert.equal(completed.spreadsheet_id, OTHER_DESTINATION_ID);
+  assert.equal(completed.last_sync_at, changed);
+  assert.equal(completed.last_sync_date, null);
+  const calls = google.calls.length;
+  assert.equal(await runSportSheetExports(cron("2026-10-24T00:06:00Z"), f.env), 0);
+  assert.equal(google.calls.length, calls);
+});
+
+test("early initial synchronization keeps cron flags, verified recipients, owner access and active leases enforced", async (t) => {
+  const early = "2026-10-24T00:00:00.000Z";
+  freezeTime(t, early);
+  const f = createSportFixture(t), destinations = new Map();
+  serviceAccount(f);
+  const unverifiedOwner = "810005";
+  f.sqlite.prepare("INSERT INTO assistant_users (id,telegram_user_id,status,created_at,updated_at) VALUES (?,?,'active',?,?)")
+    .run("fictional-unverified-export-owner", unverifiedOwner, early, early);
+  for (const [owner, enabled, verified, lease] of [
+    [OWNER, 1, early, "2026-10-24T00:10:00.000Z"],
+    [OTHER_OWNER, 0, early, null],
+    [BLOCKED_OWNER, 1, early, null],
+    [UNKNOWN_OWNER, 1, early, null],
+    [unverifiedOwner, 1, null, null],
+  ]) {
+    const id = `fictional_gated_destination_${owner}`;
+    seedProfile(f, owner);
+    destinations.set(id, sheetState());
+    f.sqlite.prepare(`INSERT INTO sport_sheet_exports
+      (owner_id,spreadsheet_id,enabled,verification_code,verified_at,lease_until,lease_token,updated_at)
+      VALUES (?,?,?,'Fictional verified code',?,?,?,?)`)
+      .run(owner, id, enabled, verified, lease, lease ? "fictional-active-lease" : null, early);
+  }
+  const google = mockGoogle(t, destinations);
+  assert.equal(await runSportSheetExports(cron(early), f.env), 0);
+  assert.equal(google.calls.length, 0);
+  assert.equal(google.oauth.length, 0);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sport_sheet_exports WHERE last_attempt_at IS NOT NULL").get().n, 0);
+  f.sqlite.prepare("UPDATE sport_sheet_exports SET lease_until=NULL,lease_token=NULL WHERE owner_id=?").run(OWNER);
+  f.env.SPORT_ENABLED = "false";
+  assert.equal(await runSportSheetExports(cron(early), f.env), 0);
+  f.env.SPORT_ENABLED = "true";
+  assert.equal(await runSportSheetExports({ ...cron(early), cron: "0 5 * * *" }, f.env), 0);
+  assert.equal(google.calls.length, 0);
+  assert.equal(await runSportSheetExports(cron(early), f.env), 1);
+  assert.ok(google.calls.every(call => call.id === `fictional_gated_destination_${OWNER}`));
+  assert.deepEqual(f.sqlite.prepare("SELECT owner_id FROM sport_sheet_exports WHERE last_sync_at IS NOT NULL").all().map(row => row.owner_id), [OWNER]);
+});
+
+for (const firstFails of [false, true]) {
+  test(`an early cron with a stale snapshot cannot repeat an initial export after another cron ${firstFails ? "failed" : "completed"}`, async (t) => {
+    const early = "2026-10-24T00:00:00.000Z";
+    freezeTime(t, early);
+    const f = createSportFixture(t), state = sheetState();
+    serviceAccount(f);
+    const google = mockGoogle(t, new Map([[DESTINATION_ID, state]]));
+    await api(f, `/days/${DAY}`, { method: "PUT", body: { steps: 8500 } });
+    await verifiedConfig(f, state);
+    if (firstFails) {
+      state.status = 403;
+      t.mock.method(console, "error", () => {});
+    }
+    const prepare = f.db.prepare.bind(f.db);
+    let snapshots = 0, releaseSecond, secondRead;
+    const held = new Promise(resolve => { releaseSecond = resolve; });
+    const snapshotReady = new Promise(resolve => { secondRead = resolve; });
+    t.mock.method(f.db, "prepare", sql => {
+      const statement = prepare(sql);
+      if (!sql.includes("SELECT e.*, p.timezone FROM sport_sheet_exports")) return statement;
+      return { ...statement, bind(...values) {
+        const bound = statement.bind(...values);
+        return { ...bound, async all() {
+          const result = await bound.all();
+          if (++snapshots === 2) { secondRead(); await held; }
+          return result;
+        } };
+      } };
+    });
+    const first = runSportSheetExports(cron(early), f.env);
+    const second = runSportSheetExports(cron(early), f.env);
+    await snapshotReady;
+    let firstResult;
+    try { firstResult = await first; }
+    finally { delete state.status; releaseSecond(); }
+    const secondResult = await second;
+    assert.deepEqual([firstResult, secondResult], [firstFails ? 0 : 1, 0], "a released lease must not make an outdated initial-sync or backoff decision valid again");
+    assert.equal(google.writes.length, firstFails ? 0 : 1);
+    assert.equal(state.values.length, firstFails ? 1 : 2);
+  });
+}

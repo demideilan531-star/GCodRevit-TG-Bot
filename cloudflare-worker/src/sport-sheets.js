@@ -15,6 +15,9 @@ const ERRORS = {
 let cachedToken;
 
 function error(code) { const e = new Error(ERRORS[code] || ERRORS.sync); e.code = code; return e; }
+function hasTemplateTabs(metadata) {
+  return metadata.sheets?.length === TEMPLATE_TABS.length && TEMPLATE_TABS.every(title => metadata.sheets.some(s => s.properties.title === title));
+}
 function credentials(env) {
   try {
     const value = JSON.parse(env.GOOGLE_SHEETS_SERVICE_ACCOUNT || '{}');
@@ -92,14 +95,20 @@ export async function saveSheetExportConfig(db, ownerValue, env, input) {
   let verified = same ? old.verified_at : null;
   if (input.enabled) {
     if (!credentials(env)) throw error('not_configured');
-    const metadata = await google(env, id, '?fields=properties(title),sheets(properties(title))');
-    if (!TEMPLATE_TABS.every(title => metadata.sheets?.some(s => s.properties.title === title))) throw error('template');
+    const metadata = await google(env, id, '?fields=properties(title),sheets(properties(sheetId,title,gridProperties(rowCount)))');
+    if (!hasTemplateTabs(metadata)) throw error('template');
+    const diary = metadata.sheets.find(s => s.properties.title === TEMPLATE_TABS[0]).properties;
+    if (!Number.isInteger(diary.gridProperties?.rowCount) || diary.gridProperties.rowCount < 2 || diary.gridProperties.rowCount > 20000) throw error('template');
     const header = await google(env, id, `/values/${encodeURIComponent(`'${TEMPLATE_TABS[0]}'!A1:J1`)}`);
     if (!DIARY_HEADERS.every((name, index) => header.values?.[0]?.[index] === name)) throw error('template');
     if (!verified && !metadata.properties?.title?.includes(code)) {
       throw new Error(`Для подтверждения доступа добавь ${code} в название своей таблицы и снова включи выгрузку. После подтверждения код можно убрать.`);
     }
     verified ||= new Date().toISOString();
+    await google(env, id, ':batchUpdate', { method: 'POST', body: JSON.stringify({ requests: [{ setDataValidation: {
+      range: { sheetId: diary.sheetId, startRowIndex: 1, endRowIndex: diary.gridProperties.rowCount, startColumnIndex: 5, endColumnIndex: 6 },
+      rule: { condition: { type: 'ONE_OF_LIST', values: Object.values(TRAINING).map(userEnteredValue => ({ userEnteredValue })) }, strict: true, showCustomUi: true },
+    } }] }) });
   }
   const now = new Date().toISOString();
   await db.prepare('INSERT OR IGNORE INTO sport_profiles (owner_id,updated_at) VALUES (?,?)').bind(owner, now).run();
@@ -145,7 +154,7 @@ export async function exportSportSheet(db, env, config) {
   const id = config.spreadsheet_id, owner = config.owner_id;
   if (id === REFERENCE_SHEET_ID) throw error('template');
   const metadata = await google(env, id, '?fields=sheets(properties(sheetId,title,gridProperties(rowCount)))');
-  if (!TEMPLATE_TABS.every(title => metadata.sheets?.some(s => s.properties.title === title))) throw error('template');
+  if (!hasTemplateTabs(metadata)) throw error('template');
   const diary = metadata.sheets.find(s => s.properties.title === TEMPLATE_TABS[0]).properties;
   const maxRows = Math.min(diary.gridProperties.rowCount, 20000);
   const range = `'${TEMPLATE_TABS[0]}'!A1:J${maxRows}`;
@@ -177,7 +186,10 @@ export async function exportSportSheet(db, env, config) {
   const additions = nextRow - 1 - diary.gridProperties.rowCount;
   const formatRequests = additions > 0 ? [
     { appendDimension: { sheetId: diary.sheetId, dimension: 'ROWS', length: additions } },
-    { copyPaste: { source: { sheetId: diary.sheetId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 10 }, destination: { sheetId: diary.sheetId, startRowIndex: diary.gridProperties.rowCount, endRowIndex: nextRow - 1, startColumnIndex: 0, endColumnIndex: 10 }, pasteType: 'PASTE_FORMAT' } },
+    ...['PASTE_FORMAT', 'PASTE_DATA_VALIDATION'].map(pasteType => ({ copyPaste: {
+      source: { sheetId: diary.sheetId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 10 },
+      destination: { sheetId: diary.sheetId, startRowIndex: diary.gridProperties.rowCount, endRowIndex: nextRow - 1, startColumnIndex: 0, endColumnIndex: 10 }, pasteType,
+    } })),
   ] : [];
   if (formatRequests.length) { await assertActive(); await google(env, id, ':batchUpdate', { method: 'POST', body: JSON.stringify({ requests: formatRequests }) }); }
   let batch = [], bytes = 0;
@@ -205,15 +217,23 @@ export async function runSportSheetExports(controller, env) {
   for (const row of rows) {
     const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: row.timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
     const date = `${parts.year}-${parts.month}-${parts.day}`, time = `${parts.hour}:${parts.minute}`;
-    if (time < '03:15' || row.last_sync_date === date || (row.last_attempt_at && now.getTime() - Date.parse(row.last_attempt_at) < 3600000)) continue;
+    const initialSync = !row.last_sync_at;
+    if ((time < '03:15' && !initialSync) || row.last_sync_date === date || (row.error_code && row.last_attempt_at && now.getTime() - Date.parse(row.last_attempt_at) < 3600000)) continue;
     if (!await getAssistantAccess(env, { id: row.owner_id })) continue;
     const token = crypto.randomUUID(), until = new Date(now.getTime() + 10 * 60000).toISOString();
-    const claimed = await db.prepare('UPDATE sport_sheet_exports SET lease_token=?,lease_until=?,last_attempt_at=? WHERE owner_id=? AND enabled=1 AND (lease_until IS NULL OR lease_until < ?)').bind(token, until, iso, row.owner_id, iso).run();
+    // A completed parallel tick must invalidate this snapshot before another claim.
+    const claimed = await db.prepare(`UPDATE sport_sheet_exports SET lease_token=?,lease_until=?,last_attempt_at=?
+      WHERE owner_id=? AND enabled=1 AND (lease_until IS NULL OR lease_until < ?)
+      AND spreadsheet_id=? AND verified_at IS ? AND last_sync_at IS ? AND last_sync_date IS ?
+      AND last_attempt_at IS ? AND error_code IS ?`).bind(token, until, iso, row.owner_id, iso,
+      row.spreadsheet_id, row.verified_at ?? null, row.last_sync_at ?? null, row.last_sync_date ?? null,
+      row.last_attempt_at ?? null, row.error_code ?? null).run();
     if (!claimed.meta?.changes) continue;
     attempted++;
     try {
       await exportSportSheet(db, env, { ...row, lease_token: token });
-      await db.prepare('UPDATE sport_sheet_exports SET last_sync_at=?,last_sync_date=?,error_code=NULL,lease_until=NULL,lease_token=NULL WHERE owner_id=? AND lease_token=? AND spreadsheet_id=?').bind(iso, date, row.owner_id, token, row.spreadsheet_id).run();
+      const scheduledDate = time < '03:15' ? row.last_sync_date : date;
+      await db.prepare('UPDATE sport_sheet_exports SET last_sync_at=?,last_sync_date=?,error_code=NULL,lease_until=NULL,lease_token=NULL WHERE owner_id=? AND lease_token=? AND spreadsheet_id=?').bind(iso, scheduledDate, row.owner_id, token, row.spreadsheet_id).run();
       count++;
     } catch (e) {
       await db.prepare('UPDATE sport_sheet_exports SET error_code=?,lease_until=NULL,lease_token=NULL WHERE owner_id=? AND lease_token=?').bind(e.code || 'sync', row.owner_id, token).run();

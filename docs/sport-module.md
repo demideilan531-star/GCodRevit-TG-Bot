@@ -118,8 +118,13 @@ knowing its URL. The code can be removed from the title after verification; no
 verification cells or extra tabs are inserted. One sheet cannot be registered to
 two bot users. Disabling or replacing a destination invalidates any running lease.
 
-The target must retain exactly the example's three named tabs. Export rejects a
-missing tab or mismatched daily headers rather than silently inventing a layout.
+The target must retain exactly the example's three named tabs. Export rejects an
+additional/missing tab or mismatched daily headers rather than silently inventing
+a layout. After edit-access verification, enabling the destination sets only the
+diary's F2:F dropdown to the five training types already present in the reference
+dictionary and the bot. This fixes the sample's shorter three-choice rule and
+confirms that the service account can edit the destination. Values, formatting,
+other validation rules and the original reference remain untouched.
 
 | Target | Value from the bot database |
 | --- | --- |
@@ -137,12 +142,16 @@ missing tab or mismatched daily headers rather than silently inventing a layout.
 
 No extra calorie columns or tabs are introduced. The dashboard's formulas, charts,
 headers and layout are not overwritten. Date rows are matched and updated in place;
-missing dates are appended. New rows inherit the template's format. Sheets writes
+missing dates are appended. New rows inherit the template's format and validation
+in separate requests, retaining dropdowns and nutrition checkboxes. Sheets writes
 use RAW values, so food names and notes cannot become formulas. Unknown nutrients
 remain unknown and partial meal sums are labeled as such inside the comment.
 
-The existing minute scheduler checks at/after 03:15 in each user's timezone and
-exports at most once per local date. It runs only for enabled, verified destinations
+The existing minute scheduler runs an initial synchronization on the next tick
+after a new destination is enabled and verified, then at/after 03:15 in each user's
+timezone at most once per local date. An initial success before 03:15 does not
+consume that day's scheduled run or delay it with the error retry backoff.
+It runs only for enabled, verified destinations
 whose owners still have access. No credentials means no Google calls and no fake
 success. Database leases prevent concurrent exports; retries are date-upserts and
 are delayed at least an hour after failure. Requests are bounded to 1.5 MB/300 rows
