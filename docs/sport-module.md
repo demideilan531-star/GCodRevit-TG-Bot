@@ -48,7 +48,8 @@ CSV is escaped against spreadsheet formula injection.
 - `PUT /api/sport/settings`: atomically save timezone, own goals and up to 16 questions.
 - `GET /api/sport/export?from=...&to=...&kind=days|meals`: private CSV.
 
-There is no anonymous sport API, external coach access or Google Sheet write.
+There is no anonymous sport API or external coach access. The optional Google
+Sheet mirror is configured separately below.
 
 ## Questions and replies
 
@@ -56,18 +57,29 @@ Questions are disabled for new users until they explicitly save a schedule.
 Kinds are `sleep`, `meal`, `water`, `steps` and combined `evening`; multiple meal times and labels are
 supported. The user's timezone, not the server clock, determines the date/time.
 
+Migration `0007_add_sport_reminder_mode.sql` adds a per-reminder `mode`:
+`notification` (default) or `question`. Existing reminders become notifications;
+their times and enabled flags are not changed. Notifications send a normal message
+with an inline "Open diary" Mini App button for the occurrence's date. They do
+not create a reply prompt or request a chat response. Only explicit `question`
+mode uses the reply workflow below. The settings screen supports up to sixteen
+independent reminders, including several meals, and a separate mode for each.
+Suggested sleep/breakfast/lunch/dinner/evening entries are disabled until saved
+with their toggles on. An explicitly added entry starts enabled in the unsaved
+form; it is not scheduled until Save succeeds.
+
 Cloudflare cron `* * * * *` checks an indexed due-time queue. The independent
 morning briefing retains cron `0 5 * * *`. `SPORT_ENABLED=false` disables sport
 question handling and scheduling without disabling tasks or the morning briefing.
 
-Every occurrence is claimed once. Delayed questions older than 30 minutes are
+Every occurrence is claimed once. Delayed reminders older than 30 minutes are
 skipped to avoid flooding after downtime. Failed/ambiguous sends are recorded,
 not blindly retried, because Telegram may have received the first request.
 Queue capacity is 20 due questions per minute; this is a personal-assistant scale
 implementation, not a mass mailing service. User blocking is rechecked before
 sending each question.
 
-Questions use Telegram ForceReply and expire after 18 hours. Replies to the
+Question-mode reminders use Telegram ForceReply and expire after 18 hours. Replies to the
 original or a clarification are intercepted before task capture and scoped to
 the question's owner, date and kind. An expired/completed question cannot silently
 create a task or add a second meal. Unrelated chat messages remain tasks.
@@ -78,7 +90,10 @@ Examples of explicitly supplied values:
 - Evening: `Воды 2 л, шаги 8500, питание по плану`.
 - Meal text or photo caption: `Овсянка, 400 ккал, Б 20 Ж 10 У 55`.
 - Manual chat entry: `/sport сон Спал 8 часов` or `/sport еда Рис, 450 ккал, Б 15 Ж 10 У 70`.
-- `/sport` opens the section without adding another permanent keyboard row.
+- `/sport` and the private chat's Sport button open the section. The button is
+  shown for both administrator and ordinary users only while Sport is enabled;
+  role-specific channel controls remain restricted. Existing Telegram keyboards
+  refresh on the next `/start` or regular bot response with a keyboard.
 
 Units are required for water. Unparseable/out-of-range values are not guessed;
 the question remains open. A positive acknowledgement is sent only after the

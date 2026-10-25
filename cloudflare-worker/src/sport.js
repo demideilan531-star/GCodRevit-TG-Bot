@@ -3,6 +3,7 @@ import { validateTelegramInitData } from './tasks.js';
 import { getSheetExportConfig, saveSheetExportConfig } from './sport-sheets.js';
 
 export const SPORT_CRON = '* * * * *';
+export const BUTTON_SPORT = 'Спорт';
 export const TRAINING_TYPES = ['rest', 'strength', 'cardio', 'stretch', 'other'];
 const DEFAULT_TIMEZONE = 'Europe/Moscow';
 const MAX_BODY = 16384;
@@ -214,7 +215,7 @@ async function saveSettings(db, owner, value) {
   const input = object(value), timezone = validTimezone(input.timezone), goals = {};
   object(input.goals);
   for (const [key, limits] of Object.entries(GOAL_NUMBERS)) if (Object.hasOwn(input.goals, key)) goals[key] = number(input.goals[key], limits);
-  if (!Array.isArray(input.reminders) || input.reminders.length > 16) throw new Error('Можно настроить до 16 вопросов в день.');
+  if (!Array.isArray(input.reminders) || input.reminders.length > 16) throw new Error('Можно настроить до 16 напоминаний в день.');
   const existing = (await db.prepare('SELECT id FROM sport_reminders WHERE owner_id = ?').bind(owner).all()).results || [];
   const allowedIds = new Set(existing.map(r => r.id)), ids = new Set(), slots = new Set(), now = new Date();
   const reminders = input.reminders.map(item => {
@@ -223,19 +224,21 @@ async function saveSettings(db, owner, value) {
     const id = item.id && allowedIds.has(item.id) ? item.id : crypto.randomUUID();
     if (ids.has(id)) throw new Error('Повторное напоминание.');
     ids.add(id);
+    const mode = item.mode === undefined ? 'notification' : item.mode;
+    if (!['notification', 'question'].includes(mode)) throw new Error('Некорректный режим напоминания.');
     const time = validTime(item.time), label = text(item.label || '', 80) || REMINDER_LABELS[item.kind];
     const slot = `${item.kind}:${time}`;
-    if (slots.has(slot)) throw new Error('Одинаковые вопросы в одно время не нужны.');
+    if (slots.has(slot)) throw new Error('Одинаковые напоминания в одно время не нужны.');
     slots.add(slot);
-    return { id, kind: item.kind, time, label, enabled: item.enabled, next: item.enabled ? nextReminderDue({ time }, timezone, now) : null };
+    return { id, kind: item.kind, mode, time, label, enabled: item.enabled, next: item.enabled ? nextReminderDue({ time }, timezone, now) : null };
   });
   await db.batch([
     db.prepare(`INSERT INTO sport_profiles (owner_id, timezone, goals_json, updated_at) VALUES (?, ?, ?, ?)
       ON CONFLICT(owner_id) DO UPDATE SET timezone=excluded.timezone, goals_json=excluded.goals_json, updated_at=excluded.updated_at`)
       .bind(owner, timezone, JSON.stringify(goals), now.toISOString()),
     db.prepare('DELETE FROM sport_reminders WHERE owner_id = ?').bind(owner),
-    ...reminders.map(r => db.prepare(`INSERT INTO sport_reminders (id,owner_id,kind,time,label,enabled,next_due_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`)
-      .bind(r.id, owner, r.kind, r.time, r.label, Number(r.enabled), r.next, now.toISOString())),
+    ...reminders.map(r => db.prepare(`INSERT INTO sport_reminders (id,owner_id,kind,mode,time,label,enabled,next_due_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`)
+      .bind(r.id, owner, r.kind, r.mode, r.time, r.label, Number(r.enabled), r.next, now.toISOString())),
   ]);
   return { profile: { timezone, goals }, reminders: reminders.map(({ next, ...r }) => r) };
 }
@@ -260,7 +263,7 @@ export async function handleSportApi(request, env) {
         const csv = '\uFEFF' + [keys, ...rows.map(row => keys.map(k => row[k]))].map(row => row.map(csvCell).join(';')).join('\r\n');
         return new Response(csv, { headers: { 'Content-Type': 'text/csv;charset=utf-8', 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="sport-${mealExport ? 'meals' : 'days'}-${from}-${to}.csv"`, 'X-Content-Type-Options': 'nosniff' } });
       }
-      const reminders = ((await db.prepare('SELECT id, kind, time, label, enabled FROM sport_reminders WHERE owner_id = ? ORDER BY time').bind(owner).all()).results || []).map(r => ({ ...r, enabled: Boolean(r.enabled) }));
+      const reminders = ((await db.prepare('SELECT id, kind, mode, time, label, enabled FROM sport_reminders WHERE owner_id = ? ORDER BY time').bind(owner).all()).results || []).map(r => ({ ...r, enabled: Boolean(r.enabled) }));
       return json({ days, meals, profile, reminders, today, training_types: TRAINING_TYPES, sheet_export: await getSheetExportConfig(db, owner, env) });
     }
     const day = suffix.match(/^\/days\/(20\d{2}-\d{2}-\d{2})$/);
@@ -354,9 +357,10 @@ export function parseSportReply(kind, source) {
   return null;
 }
 
-function sportAppUrl(env) {
+function sportAppUrl(env, date) {
   const url = new URL(env.TASKS_APP_URL || 'https://gcodrevit-telegram-bot.demideilan531.workers.dev/tasks/');
   url.pathname = '/sport/'; url.search = ''; url.hash = '';
+  if (date) url.searchParams.set('date', validDate(date));
   return url.toString();
 }
 
@@ -384,8 +388,8 @@ export async function handleSportUpdate(update, env, { telegramApi, sendMessage 
   if (!message?.from?.id || message.chat?.type !== 'private' || String(message.from.id) !== String(message.chat.id)) return false;
   const owner = String(message.from.id), db = env.TASKS_DB;
   const command = String(message.text || '').trim();
-  if (/^\/sport(?:@\w+)?$/i.test(command)) {
-    await telegramApi(env, 'sendMessage', { chat_id: owner, text: 'Спортивный дневник: записи дня, питание, прогресс и личное расписание вопросов.', reply_markup: { inline_keyboard: [[{ text: 'Открыть Спорт', web_app: { url: sportAppUrl(env) } }]] } });
+  if (/^\/sport(?:@\w+)?$/i.test(command) || command === BUTTON_SPORT) {
+    await telegramApi(env, 'sendMessage', { chat_id: owner, text: 'Спортивный дневник: записи дня, питание, прогресс и личные напоминания.', reply_markup: { inline_keyboard: [[{ text: 'Открыть Спорт', web_app: { url: sportAppUrl(env) } }]] } });
     return true;
   }
   let prompt = null;
@@ -464,7 +468,19 @@ export async function runSportReminders(controller, env, { telegramApi }) {
       continue;
     }
     try {
-      await createPrompt(db, env, telegramApi, { owner, kind: reminder.kind, label: reminder.label, date: occurrenceDate, time: reminder.time });
+      if (reminder.mode === 'question') {
+        await createPrompt(db, env, telegramApi, { owner, kind: reminder.kind, label: reminder.label, date: occurrenceDate, time: reminder.time });
+      } else {
+        const message = {
+          sleep: 'Пора отметить сон в дневнике.', meal: 'Пора записать приём пищи и КБЖУ.',
+          evening: 'Пора отметить воду, шаги и итоги дня.', water: 'Пора отметить, сколько воды выпито.', steps: 'Пора записать шаги за день.',
+        };
+        const sentMessage = await telegramApi(env, 'sendMessage', {
+          chat_id: owner, text: `${reminder.label}\n${occurrenceDate}\n${message[reminder.kind]}`,
+          reply_markup: { inline_keyboard: [[{ text: 'Открыть дневник', web_app: { url: sportAppUrl(env, occurrenceDate) } }]] },
+        });
+        if (!sentMessage?.result?.message_id) throw new Error('Telegram did not confirm reminder delivery');
+      }
       await db.prepare("UPDATE sport_deliveries SET status='sent' WHERE id=?").bind(id).run();
       sent++;
     } catch {

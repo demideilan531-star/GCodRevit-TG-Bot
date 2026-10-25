@@ -709,17 +709,30 @@ async function loadProgress(force = false) {
 
 function defaultReminders() {
   return [
-    { kind: "sleep", time: "09:00", label: "Сон", enabled: false },
-    { kind: "meal", time: "13:00", label: "Обед", enabled: false },
-    { kind: "evening", time: "21:00", label: "Вода и шаги", enabled: false },
+    { kind: "sleep", mode: "notification", time: "09:00", label: "Сон", enabled: false },
+    { kind: "meal", mode: "notification", time: "08:00", label: "Завтрак", enabled: false },
+    { kind: "meal", mode: "notification", time: "13:00", label: "Обед", enabled: false },
+    { kind: "meal", mode: "notification", time: "19:00", label: "Ужин", enabled: false },
+    { kind: "evening", mode: "notification", time: "21:00", label: "Вода и шаги", enabled: false },
   ];
+}
+function nextReminderTime(kind = "meal") {
+  const occupied = new Set([...$("reminderList").querySelectorAll(".reminder")]
+    .filter(row => row.querySelector('[name="kind"]').value === kind)
+    .map(row => row.querySelector('[name="time"]').value));
+  const preferred = ["08:00", "13:00", "19:00", "16:00", "10:00", "21:00", "12:00"];
+  const remaining = Array.from({ length: 96 }, (_, i) => {
+    const minute = (6 * 60 + i * 15) % 1440;
+    return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+  });
+  return [...preferred, ...remaining].find(time => !occupied.has(time));
 }
 function markSettingsChanged() {
   state.settingsDirty = true;
   $("saveSettings").disabled = state.settingsBusy;
   status("settingsSaveStatus", "Не сохранено", "dirty");
 }
-function renderReminder(reminder = { kind: "meal", time: "13:00", label: "", enabled: false }) {
+function renderReminder(reminder = { kind: "meal", mode: "notification", time: "13:00", label: "", enabled: false }) {
   const row = node("div", "reminder");
   if (reminder.id) row.dataset.id = reminder.id;
   const top = node("div", "reminder-top");
@@ -732,7 +745,7 @@ function renderReminder(reminder = { kind: "meal", time: "13:00", label: "", ena
   remove.addEventListener("click", () => { row.remove(); markSettingsChanged(); });
   top.append(toggleLabel, remove);
   const fields = node("div", "field-grid");
-  const kindField = node("label", "field"); kindField.append(node("span", "", "Когда"));
+  const kindField = node("label", "field"); kindField.append(node("span", "", "Что отметить"));
   const kind = node("select"); kind.name = "kind";
   Object.entries(reminderLabels).forEach(([key, label]) => kind.add(new Option(label, key)));
   kind.value = reminder.kind;
@@ -741,9 +754,15 @@ function renderReminder(reminder = { kind: "meal", time: "13:00", label: "", ena
   const timeField = node("label", "field"); timeField.append(node("span", "", "Время"));
   const time = node("input"); time.name = "time"; time.type = "time"; time.required = true; time.value = reminder.time; timeField.append(time);
   fields.append(kindField, timeField);
+  const modeField = node("label", "field"); modeField.append(node("span", "", "Действие"));
+  const mode = node("select"); mode.name = "mode";
+  mode.add(new Option("Открыть дневник", "notification"));
+  mode.add(new Option("Ответить в чате", "question"));
+  mode.value = reminder.mode || "notification";
+  modeField.append(mode);
   const nameField = node("label", "field reminder-name"); nameField.append(node("span", "", "Подпись"));
   const name = node("input"); name.name = "label"; name.maxLength = 80; name.value = reminder.label || ""; name.placeholder = "Без подписи"; nameField.append(name);
-  row.append(top, fields, nameField);
+  row.append(top, fields, modeField, nameField);
   $("reminderList").append(row);
 }
 
@@ -768,6 +787,7 @@ function settingsPayload() {
     reminders: [...$("reminderList").querySelectorAll(".reminder")].map((row) => ({
       ...(row.dataset.id ? { id: row.dataset.id } : {}),
       kind: row.querySelector('[name="kind"]').value,
+      mode: row.querySelector('[name="mode"]').value,
       time: row.querySelector('[name="time"]').value,
       label: row.querySelector('[name="label"]').value.trim(),
       enabled: row.querySelector('[name="enabled"]').checked,
@@ -977,9 +997,8 @@ function bindEvents() {
   $("addReminder").addEventListener("click", () => {
     const rows = [...$("reminderList").querySelectorAll(".reminder")];
     if (rows.length >= 16) { toast("Не больше 16 напоминаний"); return; }
-    const mealTimes = rows.filter((row) => row.querySelector('[name="kind"]').value === "meal").map((row) => row.querySelector('[name="time"]').value);
-    const time = ["08:00", "13:00", "19:00", "16:00", "10:00", "21:00"].find((value) => !mealTimes.includes(value)) || "12:00";
-    renderReminder({ kind: "meal", time, label: "", enabled: false });
+    const time = nextReminderTime();
+    renderReminder({ kind: "meal", mode: "notification", time, label: "", enabled: true });
     renderIcons(); markSettingsChanged();
   });
   $("refreshButton").addEventListener("click", refresh);
@@ -1000,8 +1019,9 @@ async function boot() {
   $("refreshButton").disabled = true;
   try {
     await loadRange(state.today, state.today, { force: true, metadata: true });
-    state.selected = state.today;
-    state.month = state.today.slice(0, 7);
+    const requestedDate = new URLSearchParams(location.search).get("date");
+    state.selected = requestedDate && validDate(requestedDate) ? requestedDate : state.today;
+    state.month = state.selected.slice(0, 7);
     await loadRange(state.selected, state.selected);
     $("progressEnd").value = state.today;
     renderTraining(); renderDay(); renderSettings(true); renderSheetExport();

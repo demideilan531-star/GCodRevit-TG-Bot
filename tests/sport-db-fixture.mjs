@@ -9,6 +9,7 @@ const MIGRATIONS = [
   "0004_add_briefing_requests.sql",
   "0005_add_sport.sql",
   "0006_add_sport_sheet_exports.sql",
+  "0007_add_sport_reminder_mode.sql",
 ];
 
 export const OWNER = "810001";
@@ -150,17 +151,17 @@ export function createSportFixture(t) {
   }
   function seedReminder({
     id = "fictional-reminder-01", ownerId = OWNER, kind = "sleep", time = "09:00",
-    timezone = "Europe/Moscow", due = new Date().toISOString(), enabled = true,
+    timezone = "Europe/Moscow", due = new Date().toISOString(), enabled = true, mode = "notification",
   } = {}) {
     const createdAt = new Date().toISOString();
     sqlite.prepare(`INSERT INTO sport_profiles (owner_id, timezone, goals_json, updated_at)
       VALUES (?, ?, '{}', ?) ON CONFLICT(owner_id) DO UPDATE SET timezone=excluded.timezone`)
       .run(ownerId, timezone, createdAt);
     sqlite.prepare(`INSERT INTO sport_reminders
-      (id, owner_id, kind, time, label, enabled, next_due_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, ownerId, kind, time, `Fictional ${kind} question`, Number(enabled), due, createdAt);
-    return { id, ownerId, kind, time, due };
+      (id, owner_id, kind, mode, time, label, enabled, next_due_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, ownerId, kind, mode, time, `Fictional ${kind} reminder`, Number(enabled), due, createdAt);
+    return { id, ownerId, kind, mode, time, due };
   }
   return { sqlite, db, env, request, calls, helpers, message, seedPrompt, seedReminder };
 }

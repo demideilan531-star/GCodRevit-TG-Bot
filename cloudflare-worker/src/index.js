@@ -24,7 +24,7 @@ import {
   handleMorningBriefingUpdate,
 } from "./morning-briefing.js";
 import { handleBriefingBrokerApi, runScheduledBriefing } from "./briefing-jobs.js";
-import { handleSportApi, handleSportUpdate, runSportReminders } from "./sport.js";
+import { BUTTON_SPORT, handleSportApi, handleSportUpdate, runSportReminders } from "./sport.js";
 import { runSportSheetExports } from "./sport-sheets.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
@@ -137,11 +137,12 @@ const RELEASE_FEATURES = [
   },
 ];
 
-function keyboard(role = "admin") {
+function keyboard(role = "admin", sportEnabled = false) {
   if (role !== "admin") {
     return {
       keyboard: [
         [{ text: BUTTON_PERSONAL_GMAIL }, { text: BUTTON_WEATHER }],
+        ...(sportEnabled ? [[{ text: BUTTON_SPORT }]] : []),
       ],
       resize_keyboard: true,
       one_time_keyboard: false,
@@ -152,6 +153,7 @@ function keyboard(role = "admin") {
     keyboard: [
       [{ text: BUTTON_GMAIL }, { text: BUTTON_GITHUB }],
       [{ text: BUTTON_VIDEO }, { text: BUTTON_WEATHER }],
+      ...(sportEnabled ? [[{ text: BUTTON_SPORT }]] : []),
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
@@ -711,7 +713,7 @@ async function claimGithubCooldown(userId) {
 function sendMessage(env, chatId, text, withKeyboard = true, role = "admin") {
   const payload = { chat_id: chatId, text };
   if (withKeyboard) {
-    payload.reply_markup = keyboard(role);
+    payload.reply_markup = keyboard(role, env.SPORT_ENABLED === "true");
   }
   return telegramApi(env, "sendMessage", payload);
 }
@@ -1010,7 +1012,7 @@ export default {
     const url = new URL(request.url);
     const sportResponse = await handleSportApi(request, env);
     if (sportResponse) return sportResponse;
-    const briefingResponse = await handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks, keyboard });
+    const briefingResponse = await handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks, keyboard: role => keyboard(role, env.SPORT_ENABLED === "true") });
     if (briefingResponse) return briefingResponse;
     const gmailBrokerResponse = await handleGmailBrokerApi(request, env, { telegramApi });
     if (gmailBrokerResponse) return gmailBrokerResponse;

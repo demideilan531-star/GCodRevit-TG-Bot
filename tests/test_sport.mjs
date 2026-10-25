@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import worker from "../cloudflare-worker/src/index.js";
 
 import {
   handleSportApi,
+  BUTTON_SPORT,
   handleSportUpdate,
   nextReminderDue,
   parseSportReply,
@@ -293,7 +295,7 @@ test("Sport API reads isolate days, meals, profiles and reminders by the signed 
     await api(f, `/days/${DAY}`, { method: "PUT", ownerId, body: { weight_kg: weight, owner_id: OTHER_OWNER } });
     await api(f, "/meals", { method: "POST", ownerId, body: mealPayload({ id: `fixture-meal-${ownerId}`, title }) }, 201);
     await api(f, "/settings", { method: "PUT", ownerId, body: settings({ timezone, reminders: [
-      { kind: "sleep", time: "09:00", label: `Fictional question ${ownerId}`, enabled: true },
+      { kind: "sleep", mode: ownerId === OWNER ? "question" : "notification", time: "09:00", label: `Fictional question ${ownerId}`, enabled: true },
     ] }) });
   }
   for (const [ownerId, weight, title, timezone] of [
@@ -307,6 +309,7 @@ test("Sport API reads isolate days, meals, profiles and reminders by the signed 
     assert.equal(body.reminders.length, 1);
     assert.equal(body.reminders[0].label, `Fictional question ${ownerId}`);
     assert.equal(body.reminders[0].enabled, true);
+    assert.equal(body.reminders[0].mode, ownerId === OWNER ? "question" : "notification");
     assert.equal(body.days[0].owner_id, undefined);
     assert.equal(body.meals[0].owner_id, undefined);
   }
@@ -589,10 +592,201 @@ test("clarifications after an explicit unparseable Sport command must not become
 const cronEvent = (time = NOW) => ({ cron: SPORT_CRON, scheduledTime: Date.parse(time) });
 const occurrenceKey = (reminder, date = DAY) => `${reminder.id}:${date}:${reminder.time}`;
 
+test("migration 0007 converts existing reminders to notifications without losing schedule or prompt data", (t) => {
+  const { sqlite } = createSqliteD1(t, { migrations: ["0005_add_sport.sql"] });
+  sqlite.prepare(`INSERT INTO sport_reminders (id,owner_id,kind,time,label,enabled,next_due_at,updated_at)
+    VALUES ('fictional-legacy',?,'meal','13:00','Fictional lunch',1,?,?)`).run(OWNER, NOW, NOW);
+  sqlite.prepare(`INSERT INTO sport_prompts (id,owner_id,chat_id,message_id,kind,label,date,time,created_at,expires_at)
+    VALUES ('fictional-legacy-prompt',?,?,6001,'meal','Fictional question',?,'13:00',?,?)`).run(OWNER, OWNER, DAY, NOW, NOW);
+  const before = { ...sqlite.prepare("SELECT * FROM sport_reminders").get() };
+  const prompt = { ...sqlite.prepare("SELECT * FROM sport_prompts").get() };
+  sqlite.exec(readFileSync(new URL("../cloudflare-worker/migrations/0007_add_sport_reminder_mode.sql", import.meta.url), "utf8"));
+  assert.deepEqual({ ...sqlite.prepare("SELECT * FROM sport_reminders").get() }, { ...before, mode: "notification" });
+  assert.deepEqual({ ...sqlite.prepare("SELECT * FROM sport_prompts").get() }, prompt);
+  sqlite.prepare(`INSERT INTO sport_reminders (id,owner_id,kind,time,label,updated_at)
+    VALUES ('fictional-new',?,'meal','19:00','Fictional dinner',?)`).run(OWNER, NOW);
+  assert.equal(sqlite.prepare("SELECT mode FROM sport_reminders WHERE id='fictional-new'").get().mode, "notification");
+  for (const mode of [null, "", "QUESTION", "unexpected"]) {
+    assert.throws(() => sqlite.prepare("UPDATE sport_reminders SET mode=? WHERE id='fictional-new'").run(mode), /constraint/i);
+  }
+  sqlite.prepare("UPDATE sport_reminders SET mode='question' WHERE id='fictional-new'").run();
+});
+
+test("settings round-trip both modes, default omitted mode to notification and reject invalid modes atomically", async (t) => {
+  freezeTime(t);
+  const f = createSportFixture(t);
+  t.mock.method(console, "error", () => {});
+  const saved = await api(f, "/settings", { method: "PUT", body: settings({ reminders: [
+    { kind: "sleep", time: "09:30", enabled: true },
+    { kind: "meal", mode: "question", time: "13:00", enabled: true },
+    { kind: "meal", mode: "notification", time: "19:00", enabled: false },
+  ] }) });
+  assert.deepEqual(saved.reminders.map(row => row.mode), ["notification", "question", "notification"]);
+  assert.deepEqual((await api(f, RANGE)).reminders, saved.reminders);
+  const stored = f.sqlite.prepare("SELECT * FROM sport_reminders ORDER BY time").all();
+  for (const mode of [null, "", "QUESTION", "notify", 0, false, {}, []]) {
+    await api(f, "/settings", { method: "PUT", body: settings({ reminders: [{ ...saved.reminders[0], mode }] }) }, 400);
+    assert.deepEqual(f.sqlite.prepare("SELECT * FROM sport_reminders ORDER BY time").all(), stored);
+  }
+  const changed = await api(f, "/settings", { method: "PUT", body: settings({
+    reminders: saved.reminders.map(row => ({ ...row, mode: row.mode === "question" ? "notification" : "question" })),
+  }) });
+  assert.deepEqual(changed.reminders.map(row => row.id), saved.reminders.map(row => row.id));
+  assert.deepEqual((await api(f, RANGE)).reminders, changed.reminders);
+});
+
+test("sixteen independent meal slots persist, resave and fire separately without duplicate fallback", async (t) => {
+  freezeTime(t);
+  const f = createSportFixture(t);
+  t.mock.method(console, "error", () => {});
+  const reminders = Array.from({ length: 16 }, (_, index) => ({
+    kind: "meal", mode: "notification", enabled: true, label: `Fictional meal ${index + 1}`,
+    time: `${String(10 + Math.floor(index / 4)).padStart(2, "0")}:${String(index % 4 * 15).padStart(2, "0")}`,
+  }));
+  const saved = await api(f, "/settings", { method: "PUT", body: settings({ reminders }) });
+  assert.equal(new Set(saved.reminders.map(row => row.id)).size, 16);
+  assert.deepEqual(saved.reminders.map(({ id, ...row }) => row), reminders);
+  await api(f, "/settings", { method: "PUT", body: settings({ reminders: saved.reminders }) });
+  assert.deepEqual((await api(f, RANGE)).reminders, saved.reminders);
+  await api(f, "/settings", { method: "PUT", body: settings({ reminders: [...saved.reminders, { ...reminders[0], time: "15:00" }] }) }, 400);
+  await api(f, "/settings", { method: "PUT", body: settings({ reminders: [saved.reminders[0], { ...reminders[0], mode: "question" }] }) }, 400);
+  assert.deepEqual((await api(f, RANGE)).reminders, saved.reminders);
+  for (const reminder of saved.reminders) {
+    const due = f.sqlite.prepare("SELECT next_due_at FROM sport_reminders WHERE id=?").get(reminder.id).next_due_at;
+    t.mock.timers.setTime(Date.parse(due));
+    assert.equal(await runSportReminders(cronEvent(due), f.env, f.helpers), 1);
+    assert.equal(await runSportReminders(cronEvent(due), f.env, f.helpers), 0);
+    assert.match(f.calls.at(-1).body.text, new RegExp(reminder.label));
+    assert.equal(f.sqlite.prepare("SELECT status FROM sport_deliveries WHERE id=?").get(occurrenceKey(reminder)).status, "sent");
+  }
+  assert.equal(f.calls.length, 16);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sport_prompts").get().n, 0);
+});
+
+test("notification kinds send ordinary private messages with original local date and no prompt context", async (t) => {
+  const time = "2026-10-23T18:30:00.000Z";
+  freezeTime(t, time);
+  const f = createSportFixture(t);
+  f.env.TASKS_APP_URL = "https://sport.example.test/tasks/?ignored=1#ignored";
+  for (const kind of ["sleep", "meal", "evening", "water", "steps"]) {
+    f.seedReminder({ id: `fictional-notification-${kind}`, kind, timezone: "Asia/Kathmandu", time: "23:45", due: "2026-10-23T18:00:00.000Z" });
+  }
+  assert.equal(await runSportReminders(cronEvent(time), f.env, f.helpers), 5);
+  for (const { method, body, messageId } of f.calls) {
+    assert.equal(method, "sendMessage");
+    assert.equal(String(body.chat_id), OWNER);
+    assert.equal(body.reply_parameters, undefined);
+    assert.deepEqual(body.reply_markup, { inline_keyboard: [[{
+      text: "Открыть дневник", web_app: { url: `https://sport.example.test/sport/?date=${DAY}` },
+    }]] });
+    assert.match(body.text, /2026-10-23/);
+    assert.doesNotMatch(body.text, /undefined|2026-10-24/);
+    assert.equal(await handleSportUpdate(f.message("Спал 7 часов", { reply_to_message: { message_id: messageId } }), f.env, f.helpers), false);
+  }
+  for (const table of ["sport_prompts", "sport_prompt_messages", "sport_updates", "sport_days", "sport_meals"]) {
+    assert.equal(f.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0, table);
+  }
+  assert.equal(await runSportReminders(cronEvent(time), f.env, f.helpers), 0);
+  assert.equal(f.calls.length, 5);
+});
+
+test("notification cron deduplicates concurrent delivery and advances already-claimed slots", async (t) => {
+  freezeTime(t);
+  const f = createSportFixture(t);
+  const reminder = f.seedReminder();
+  const results = await Promise.all([runSportReminders(cronEvent(), f.env, f.helpers), runSportReminders(cronEvent(), f.env, f.helpers)]);
+  assert.equal(results.reduce((sum, value) => sum + value, 0), 1);
+  f.sqlite.prepare("UPDATE sport_reminders SET next_due_at=? WHERE id=?").run(NOW, reminder.id);
+  assert.equal(await runSportReminders(cronEvent(), f.env, f.helpers), 0);
+  assert.equal(f.sqlite.prepare("SELECT next_due_at FROM sport_reminders WHERE id=?").get(reminder.id).next_due_at, "2026-10-24T06:00:00.000Z");
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sport_deliveries").get().n, 1);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sport_prompts").get().n, 0);
+});
+
+test("failed notification sends never create a prompt or retry an ambiguous delivery", async (t) => {
+  freezeTime(t);
+  const f = createSportFixture(t);
+  t.mock.method(console, "error", () => {});
+  const reminder = f.seedReminder();
+  const helpers = { telegramApi: async (_env, method, body) => {
+    f.calls.push({ method, body });
+    throw new Error("Fictional ambiguous Telegram timeout");
+  } };
+  assert.equal(await runSportReminders(cronEvent(), f.env, helpers), 0);
+  f.sqlite.prepare("UPDATE sport_reminders SET next_due_at=? WHERE id=?").run(NOW, reminder.id);
+  assert.equal(await runSportReminders(cronEvent(), f.env, helpers), 0);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.sqlite.prepare("SELECT status FROM sport_deliveries WHERE id=?").get(occurrenceKey(reminder)).status, "failed");
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sport_prompts").get().n, 0);
+});
+
+test("mixed notification/question schedules retain ForceReply only for question and unrelated replies remain tasks", async (t) => {
+  freezeTime(t);
+  const f = createSportFixture(t);
+  installTelegram(t, f);
+  f.seedReminder({ id: "fictional-question", mode: "question" });
+  f.seedReminder({ id: "fictional-notification", kind: "meal" });
+  assert.equal(await runSportReminders(cronEvent(), f.env, f.helpers), 2);
+  const question = f.calls.find(({ body }) => body.reply_markup.force_reply);
+  const notification = f.calls.find(({ body }) => body.reply_markup.inline_keyboard);
+  assert.ok(question && notification);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sport_prompts").get().n, 1);
+  await webhook(f, f.message("Спал 7 часов", { message_id: 7801, reply_to_message: { message_id: notification.messageId } }));
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM tasks WHERE owner_id=?").get(OWNER).n, 1);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sport_days").get().n, 0);
+  await webhook(f, f.message("Спал 7 часов", { message_id: 7802, reply_to_message: { message_id: question.messageId } }));
+  assert.equal(f.sqlite.prepare("SELECT sleep_hours FROM sport_days WHERE owner_id=? AND date=?").get(OWNER, DAY).sleep_hours, 7);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM tasks").get().n, 1);
+  assert.ok(f.calls.at(-1).body.reply_markup.keyboard.flat().some(button => button.text === BUTTON_SPORT));
+});
+
+test("Sport menu button is available to allowed users before task capture without granting admin permissions", async (t) => {
+  freezeTime(t);
+  const f = createSportFixture(t);
+  installTelegram(t, f);
+  assert.equal(BUTTON_SPORT, "Спорт");
+  f.sqlite.prepare("UPDATE assistant_users SET can_tasks=0,can_weather=0,can_gmail=0 WHERE telegram_user_id=?").run(OTHER_OWNER);
+  const originalAccess = { ...f.sqlite.prepare("SELECT role,can_tasks,can_weather,can_gmail FROM assistant_users WHERE telegram_user_id=?").get(OWNER) };
+  for (const owner of [OWNER, OTHER_OWNER, f.env.TELEGRAM_ADMIN_IDS]) {
+    await webhook(f, f.message(BUTTON_SPORT, { message_id: 7901 }, owner));
+    const button = f.calls.at(-1).body.reply_markup.inline_keyboard[0][0];
+    assert.equal(new URL(button.web_app.url).pathname, "/sport/");
+    assert.equal(String(f.calls.at(-1).body.chat_id), owner);
+  }
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM tasks").get().n, 0);
+  assert.deepEqual({ ...f.sqlite.prepare("SELECT role,can_tasks,can_weather,can_gmail FROM assistant_users WHERE telegram_user_id=?").get(OWNER) }, originalAccess);
+  for (const [index, text] of ["/allow @fictional_new_user", "/users", "/block @fictional_810002"].entries()) {
+    await webhook(f, f.message(text, { message_id: 7902 + index }));
+  }
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM assistant_users").get().n, 3);
+  assert.equal(f.sqlite.prepare("SELECT status FROM assistant_users WHERE telegram_user_id=?").get(OTHER_OWNER).status, "active");
+  for (const owner of [BLOCKED_OWNER, UNKNOWN_OWNER]) {
+    await webhook(f, f.message(BUTTON_SPORT, {}, owner));
+    assert.match(f.calls.at(-1).body.text, /Доступ не настроен/);
+    assert.equal(f.calls.at(-1).body.reply_markup, undefined);
+  }
+});
+
+test("reply keyboards show Sport only when enabled and keep non-admin controls restricted", async (t) => {
+  const f = createSportFixture(t);
+  installTelegram(t, f);
+  for (const enabled of ["true", "false", undefined]) {
+    f.env.SPORT_ENABLED = enabled;
+    for (const owner of [OWNER, f.env.TELEGRAM_ADMIN_IDS]) {
+      await webhook(f, f.message("/menu", {}, owner));
+      const buttons = f.calls.at(-1).body.reply_markup.keyboard.flat().map(button => button.text);
+      assert.equal(buttons.includes(BUTTON_SPORT), enabled === "true");
+      assert.equal(buttons.filter(text => text === BUTTON_SPORT).length, enabled === "true" ? 1 : 0);
+      if (owner === OWNER) assert.ok(buttons.every(text => text === BUTTON_SPORT || /Моя почта|Погода/.test(text)));
+    }
+  }
+});
+
 test("Sport scheduler requires the minute cron and explicit enable flag", async (t) => {
   freezeTime(t);
   const f = createSportFixture(t);
-  f.seedReminder();
+  f.seedReminder({ mode: "question" });
   assert.equal(SPORT_CRON, "* * * * *");
   for (const value of [undefined, "false", "TRUE"]) {
     f.env.SPORT_ENABLED = value;
@@ -607,9 +801,9 @@ test("Sport scheduler requires the minute cron and explicit enable flag", async 
 test("due reminders send only enabled due slots, link expiring prompts and advance to the next local day", async (t) => {
   freezeTime(t);
   const f = createSportFixture(t);
-  const reminder = f.seedReminder();
-  f.seedReminder({ id: "fictional-future-reminder", kind: "meal", time: "09:01", due: "2026-10-23T06:01:00.000Z" });
-  f.seedReminder({ id: "fictional-disabled-reminder", kind: "evening", enabled: false });
+  const reminder = f.seedReminder({ mode: "question" });
+  f.seedReminder({ mode: "question", id: "fictional-future-reminder", kind: "meal", time: "09:01", due: "2026-10-23T06:01:00.000Z" });
+  f.seedReminder({ mode: "question", id: "fictional-disabled-reminder", kind: "evening", enabled: false });
   assert.equal(await runSportReminders(cronEvent(), f.env, f.helpers), 1);
   assert.equal(f.calls.length, 1);
   assert.equal(String(f.calls[0].body.chat_id), OWNER);
@@ -632,7 +826,7 @@ test("due reminders send only enabled due slots, link expiring prompts and advan
 test("concurrent minute cron invocations claim each occurrence only once", async (t) => {
   freezeTime(t);
   const f = createSportFixture(t);
-  f.seedReminder();
+  f.seedReminder({ mode: "question" });
   const results = await Promise.all([
     runSportReminders(cronEvent(), f.env, f.helpers),
     runSportReminders(cronEvent(), f.env, f.helpers),
@@ -646,7 +840,7 @@ test("concurrent minute cron invocations claim each occurrence only once", async
 test("an already-claimed occurrence still advances a stale due slot without sending again", async (t) => {
   freezeTime(t);
   const f = createSportFixture(t);
-  const reminder = f.seedReminder();
+  const reminder = f.seedReminder({ mode: "question" });
   f.sqlite.prepare("INSERT INTO sport_deliveries (id,owner_id,status,created_at) VALUES (?,?,'sent',?)")
     .run(occurrenceKey(reminder), OWNER, NOW);
   assert.equal(await runSportReminders(cronEvent(), f.env, f.helpers), 0);
@@ -658,7 +852,7 @@ test("an already-claimed occurrence still advances a stale due slot without send
 test("delivery keys include local date and wall time so a rescheduled slot is a new occurrence", async (t) => {
   freezeTime(t);
   const f = createSportFixture(t);
-  const reminder = f.seedReminder();
+  const reminder = f.seedReminder({ mode: "question" });
   assert.equal(await runSportReminders(cronEvent(), f.env, f.helpers), 1);
   f.sqlite.prepare("UPDATE sport_reminders SET time=?,next_due_at=? WHERE id=?").run("09:01", "2026-10-23T06:01:00.000Z", reminder.id);
   assert.equal(await runSportReminders(cronEvent("2026-10-23T06:01:00Z"), f.env, f.helpers), 1);
@@ -672,9 +866,9 @@ test("scheduler skips old backlog and users whose access was blocked or removed"
   freezeTime(t);
   const f = createSportFixture(t);
   const reminders = [
-    f.seedReminder({ id: "fictional-stale-slot", time: "08:29", due: "2026-10-23T05:29:00.000Z" }),
-    f.seedReminder({ id: "fictional-blocked-slot", ownerId: BLOCKED_OWNER }),
-    f.seedReminder({ id: "fictional-unknown-slot", ownerId: UNKNOWN_OWNER }),
+    f.seedReminder({ mode: "question", id: "fictional-stale-slot", time: "08:29", due: "2026-10-23T05:29:00.000Z" }),
+    f.seedReminder({ mode: "question", id: "fictional-blocked-slot", ownerId: BLOCKED_OWNER }),
+    f.seedReminder({ mode: "question", id: "fictional-unknown-slot", ownerId: UNKNOWN_OWNER }),
   ];
   assert.equal(await runSportReminders(cronEvent(), f.env, f.helpers), 0);
   assert.equal(f.calls.length, 0);
@@ -688,7 +882,7 @@ test("scheduler skips old backlog and users whose access was blocked or removed"
 test("30-minute late reminders are delivered using the stored occurrence rather than today's UTC date", async (t) => {
   freezeTime(t, "2026-10-23T18:30:00Z");
   const f = createSportFixture(t);
-  f.seedReminder({ time: "23:45", timezone: "Asia/Kathmandu", due: "2026-10-23T18:00:00.000Z" });
+  f.seedReminder({ mode: "question", time: "23:45", timezone: "Asia/Kathmandu", due: "2026-10-23T18:00:00.000Z" });
   assert.equal(await runSportReminders(cronEvent("2026-10-23T18:30:00Z"), f.env, f.helpers), 1);
   const prompt = f.sqlite.prepare("SELECT date,time FROM sport_prompts").get();
   assert.equal(prompt.date, "2026-10-23");
@@ -699,7 +893,7 @@ test("30-minute late reminders are delivered using the stored occurrence rather 
 test("ambiguous Telegram send failures are marked failed and never automatically retried", async (t) => {
   freezeTime(t);
   const f = createSportFixture(t);
-  const reminder = f.seedReminder();
+  const reminder = f.seedReminder({ mode: "question" });
   t.mock.method(console, "error", () => {});
   const helpers = { telegramApi: async (_env, method, body) => {
     f.calls.push({ method, body });
@@ -736,8 +930,8 @@ test("scheduler retains seven days of retry metadata and cascades expired prompt
 test("simultaneous questions require an explicit reply target and cannot consume an ambiguous bare answer", async (t) => {
   freezeTime(t);
   const f = createSportFixture(t);
-  f.seedReminder({ id: "fictional-sleep-reminder", kind: "sleep" });
-  f.seedReminder({ id: "fictional-meal-reminder", kind: "meal" });
+  f.seedReminder({ mode: "question", id: "fictional-sleep-reminder", kind: "sleep" });
+  f.seedReminder({ mode: "question", id: "fictional-meal-reminder", kind: "meal" });
   assert.equal(await runSportReminders(cronEvent(), f.env, f.helpers), 2);
   assert.ok(f.calls.every(({ body }) => body.reply_markup.force_reply === true));
   assert.equal(await handleSportUpdate(f.message("7,5"), f.env, f.helpers), false);
@@ -755,7 +949,7 @@ test("worker connects both Sport API and minute cron to the backend", async (t) 
   freezeTime(t);
   const f = createSportFixture(t);
   installTelegram(t, f);
-  f.seedReminder();
+  f.seedReminder({ mode: "question" });
   const response = await worker.fetch(f.request(RANGE), f.env, { waitUntil() { assert.fail("Sport API should not dispatch background work"); } });
   assert.equal(response.status, 200);
   assert.deepEqual((await response.json()).days, []);
@@ -913,9 +1107,9 @@ test("water and steps prompts created by independent cron slots route to their o
   installTelegram(t, f);
   await api(f, `/days/${DAY}`, { method: "PUT", body: { water_ml: 1750, steps: 1234, nutrition: false } });
   await api(f, "/settings", { method: "PUT", body: settings({ reminders: [
-    { kind: "evening", time: "20:30", label: "Fictional summary", enabled: true },
-    { kind: "water", time: "21:00", label: "Fictional water", enabled: true },
-    { kind: "steps", time: "22:00", label: "Fictional steps", enabled: true },
+    { kind: "evening", mode: "question", time: "20:30", label: "Fictional summary", enabled: true },
+    { kind: "water", mode: "question", time: "21:00", label: "Fictional water", enabled: true },
+    { kind: "steps", mode: "question", time: "22:00", label: "Fictional steps", enabled: true },
   ] }) });
   for (const [time, kind] of [["2026-10-23T17:30:00Z", "evening"], ["2026-10-23T18:00:00Z", "water"], ["2026-10-23T19:00:00Z", "steps"]]) {
     t.mock.timers.setTime(Date.parse(time));
