@@ -1,4 +1,8 @@
 import { authorizedMiniAppUser } from "./tasks.js";
+import {
+  CONTEXT_SHARE_PREFIX, createContextShare, listContextShares, readContextShare,
+  readShareRequest, revokeContextShare, sharedContextResponse, validateContextShareInput,
+} from "./context-shares.js";
 
 const API_PREFIX = "/api/context";
 const DEFAULT_RETENTION_DAYS = 30;
@@ -342,16 +346,17 @@ async function listChats(env, ownerId) {
 }
 
 async function listMessages(env, ownerId, chatId, limit) {
+  const cutoff = new Date(Date.now() - retentionDays(env) * 86400000).toISOString();
   const result = await contextDb(env)
     .prepare(
       `SELECT chat_id, message_id, chat_title, sender_name, direction,
               content_type, body, sent_at, edited_at
        FROM chat_context_messages
-       WHERE owner_id = ? AND chat_id = ?
+       WHERE owner_id = ? AND chat_id = ? AND sent_at >= ?
        ORDER BY sent_at DESC, message_id DESC
        LIMIT ?`,
     )
-    .bind(String(ownerId), String(chatId), clampLimit(limit))
+    .bind(String(ownerId), String(chatId), cutoff, clampLimit(limit))
     .all();
   return (result.results || []).reverse();
 }
@@ -406,13 +411,41 @@ function contextFilename(chatId) {
 
 export async function handleContextApi(request, env) {
   const url = new URL(request.url);
-  if (!url.pathname.startsWith(API_PREFIX)) return null;
+  if (url.pathname.startsWith(CONTEXT_SHARE_PREFIX)) {
+    if (!['GET', 'HEAD'].includes(request.method)) return sharedContextResponse('Только чтение.', 405, { Allow: 'GET, HEAD' });
+    const unavailable = () => sharedContextResponse(request.method === 'HEAD' ? null : 'Ссылка недоступна или срок её действия истёк.', 404);
+    try {
+      const share = await readContextShare(env, url.pathname.slice(CONTEXT_SHARE_PREFIX.length));
+      if (!share) return unavailable();
+      const messages = await listMessages(env, share.owner_id, share.chat_id, share.message_limit);
+      if (!messages.length) return unavailable();
+      const markdown = buildContextMarkdown({ chatTitle: messages.at(-1).chat_title, chatId: share.chat_id, messages });
+      return sharedContextResponse(request.method === 'HEAD' ? null : markdown);
+    } catch {
+      console.error('Context share read failed');
+      return sharedContextResponse(request.method === 'HEAD' ? null : 'Контекст временно недоступен.', 503);
+    }
+  }
+  if (url.pathname !== API_PREFIX && !url.pathname.startsWith(`${API_PREFIX}/`)) return null;
   const user = await authorizedMiniAppUser(request, env);
   if (!user) return json({ error: "Открой приложение из Telegram-бота." }, 401);
   const suffix = url.pathname.slice(API_PREFIX.length).replace(/^\//, "");
 
   try {
     await removeExpiredMessages(env, user.id);
+    if (request.method === 'GET' && suffix === 'shares') {
+      return json({ shares: await listContextShares(env, user.id, url.searchParams.get('chat_id')) });
+    }
+    if (request.method === 'POST' && suffix === 'shares') {
+      const input = validateContextShareInput(await readShareRequest(request));
+      const messages = await listMessages(env, user.id, input.chat_id, input.limit);
+      if (!messages.length) return json({ error: 'В выбранном чате нет доступных сообщений.' }, 404);
+      return json({ share: await createContextShare(env, user.id, input) }, 201);
+    }
+    if (request.method === 'DELETE' && suffix.startsWith('shares/')) {
+      await revokeContextShare(env, user.id, suffix.slice('shares/'.length));
+      return json({ ok: true });
+    }
     if (request.method === "GET" && suffix === "chats") {
       const connection = await contextDb(env)
         .prepare(
@@ -451,16 +484,16 @@ export async function handleContextApi(request, env) {
     if (request.method === "DELETE" && suffix.startsWith("chats/")) {
       const chatId = compactText(decodeURIComponent(suffix.slice("chats/".length)), 64);
       if (!chatId) return json({ error: "Чат не указан." }, 400);
-      await contextDb(env)
-        .prepare("DELETE FROM chat_context_messages WHERE owner_id = ? AND chat_id = ?")
-        .bind(String(user.id), chatId)
-        .run();
+      await contextDb(env).batch([
+        contextDb(env).prepare("DELETE FROM chat_context_messages WHERE owner_id = ? AND chat_id = ?").bind(String(user.id), chatId),
+        contextDb(env).prepare('DELETE FROM context_shares WHERE owner_id=? AND chat_id=?').bind(String(user.id), chatId),
+      ]);
       return json({ ok: true });
     }
 
     return json({ error: "Метод не поддерживается." }, 405);
   } catch (error) {
     console.error("Context API error", error);
-    return json({ error: error.message || "Ошибка контекста." }, 400);
+    return json({ error: error.message || "Ошибка контекста." }, error.status || 400);
   }
 }

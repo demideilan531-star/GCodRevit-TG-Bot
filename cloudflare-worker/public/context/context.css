@@ -29,7 +29,8 @@ body {
 }
 
 button,
-select {
+select,
+input {
   font: inherit;
 }
 
@@ -284,9 +285,17 @@ select {
 }
 
 .export-actions button {
-  width: min(50%, 372px);
+  width: auto;
+  min-width: 0;
+  max-width: 244px;
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 44px;
-  padding: 9px 14px;
+  padding: 9px 8px;
+  font-size: 13px;
   border-radius: var(--radius);
   font-weight: 700;
 }
@@ -302,6 +311,27 @@ select {
   background: var(--surface);
   color: var(--text);
 }
+
+[data-lucide], .icon-button svg, .export-actions svg { width: 18px; height: 18px; flex: 0 0 18px; }
+dialog { width: min(calc(100% - 24px), 600px); max-height: calc(100dvh - 32px); overflow: auto; padding: 20px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface); }
+dialog::backdrop { background: #0007; }
+.share-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.share-heading h2 { font-size: 20px; }
+.share-heading h3 { margin: 0; font-size: 15px; }
+.share-heading .icon-button { width: 36px; height: 36px; flex-basis: 36px; }
+.share-target { margin-bottom: 12px; font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+.share-warning { margin-bottom: 18px; padding-left: 12px; border-left: 3px solid var(--danger); font-size: 13px; line-height: 1.5; }
+.share-create { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0 24px; }
+.share-create span { font-size: 12px; color: var(--muted); }
+.share-create button { min-height: 44px; padding: 8px 12px; border-radius: 6px; font-size: 13px; font-weight: 650; }
+.share-error { margin: 12px 0; color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+.share-item { padding: 14px 0; border-top: 1px solid var(--border); }
+.share-item p { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+.share-url-row { display: flex; align-items: center; gap: 6px; }
+.share-url-row input { flex: 1; min-width: 0; width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--text); background: var(--bg); font-size: 13px; }
+.share-list > .empty-state { min-height: 64px; }
+.demo-banner { margin-bottom: 14px; padding: 8px 10px; border-left: 3px solid var(--danger); font-size: 12px; line-height: 1.5; color: var(--muted); }
+[hidden] { display: none !important; }
 
 .loading-overlay {
   position: fixed;
