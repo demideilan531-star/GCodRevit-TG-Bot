@@ -7,6 +7,7 @@
     <title>Контекст Telegram</title>
     <link rel="stylesheet" href="./context.css" />
     <script src="https://telegram.org/js/telegram-web-app.js?61"></script>
+    <script src="/sport/vendor/lucide-0.468.0.min.js" defer></script>
     <script src="./context.js" type="module"></script>
   </head>
   <body>
@@ -24,6 +25,7 @@
         </div>
         <button class="icon-button" id="refreshButton" type="button" aria-label="Обновить" title="Обновить">↻</button>
       </header>
+      <p id="demoBanner" class="demo-banner" hidden>ДЕМО · Вымышленные сообщения · Ссылки недействительны</p>
 
       <section class="status-band" id="statusBand" aria-live="polite">
         <span class="status-dot" aria-hidden="true"></span>
@@ -65,9 +67,23 @@
         <div class="export-actions">
           <button class="secondary-button" id="copyButton" type="button" disabled>Копировать</button>
           <button class="primary-button" id="downloadButton" type="button" disabled>Скачать .md</button>
+          <button class="secondary-button" id="shareButton" type="button" title="Поделиться контекстом по ссылке" disabled><i data-lucide="link" aria-hidden="true"></i>Ссылка</button>
         </div>
       </main>
     </div>
+
+    <dialog id="shareDialog" aria-labelledby="shareTitle">
+      <div class="share-heading"><h2 id="shareTitle">Ссылка на контекст</h2><button class="icon-button" id="closeShare" type="button" aria-label="Закрыть" title="Закрыть"><i data-lucide="x" aria-hidden="true"></i></button></div>
+      <p id="shareTarget" class="share-target"></p>
+      <p id="shareWarning" class="share-warning"></p>
+      <form id="shareForm">
+        <label class="field"><span>Срок доступа</span><select id="shareTtl"><option value="1">1 час</option><option value="24" selected>24 часа</option><option value="168">7 дней</option></select></label>
+        <div class="share-create"><span id="shareStatus" role="status" aria-live="polite"></span><button class="primary-button" id="createShareButton" type="submit">Создать ссылку</button></div>
+      </form>
+      <div class="share-heading"><h3>Активные ссылки</h3><button class="icon-button" id="shareRetry" type="button" title="Обновить ссылки" aria-label="Обновить ссылки"><i data-lucide="refresh-cw" aria-hidden="true"></i></button></div>
+      <p id="shareError" class="share-error" role="alert" hidden></p>
+      <div id="shareList" class="share-list"></div>
+    </dialog>
 
     <div class="loading-overlay" id="loadingOverlay" aria-live="polite">
       <span class="spinner"></span>
