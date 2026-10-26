@@ -1,8 +1,10 @@
 # Telegram Account Archive
 
-Status: implementation in progress, not enabled in production. The existing Secretary collector and scoped share links remain the active integration.
+Status: draft implementation with offline verification, not enabled in production. The existing Secretary collector and scoped share links remain the active integration. No real-account completeness or live Telegram authorization has been verified.
 
 Setup blocker (2026-10-26): the owner authorized creation of `GCod Personal Context` on the official `my.telegram.org/apps` page. After a fresh sign-in, Telegram rejected creation with `Too many attempts. Please try again later.` No application credentials or user session were obtained. The page did not provide a retry time. Do not repeatedly submit, rotate identities, use a different API application to evade this limit, or enable production synchronization without the owner's completed authorization.
+
+A single delayed normal retry returned the sign-in page again. It did not prove application creation or resolve the earlier restriction. No repeated retry job was created.
 
 ## Scope
 
@@ -36,6 +38,20 @@ The client code must not send messages, join chats, change profile or message st
 13. Synchronization is disabled by default. Only activate it after account-ID verification and explicit owner confirmation; stop or disconnect are distinct from terminating the Telegram session itself.
 14. Persist a dialog-discovery cursor and global/per-channel Telegram update state, not just per-chat newest message IDs. A StringSession contains authorization, not a complete update checkpoint. Recent-message rescans alone cannot guarantee old edits and deletions are captured.
 15. Reserve a conservative write budget before accepting each batch, reconcile it with actual D1 rows-written metrics, and include index, checkpoint, deletion, receipt and control writes. A message count is not a D1 write count. Enforce a storage watermark before the archive database is full.
+
+## Activation Gates
+
+1. The owner obtains their own Telegram application credentials and completes the local QR bootstrap described in `telegram-account-client.md`. Authorization sessions are broad account credentials, not read-only keys. Keep all credential values out of chat, Git and recordings.
+2. Provision the session and API credentials to this repository's encrypted GitHub Secrets using a separately reviewed, owner-approved secret-provisioning step. The current bootstrap only creates a locally protected session file; secret upload is not implemented.
+3. Create a separate D1 archive database without Billing. Add its real `ACCOUNT_CONTEXT_DB` binding with `account-migrations` to the Worker configuration and apply that migration only to that new database. Do not migrate or replace the Secretary or task databases.
+4. Configure Worker variables: `TELEGRAM_ACCOUNT_OWNER_ID` (the verified administrator ID), `TELEGRAM_CONTEXT_REPOSITORY_ID` (immutable GitHub numeric repository ID), `TELEGRAM_CONTEXT_OIDC_AUDIENCE` (a fixed audience shared with the workflow), and an initial `TELEGRAM_ACCOUNT_DAILY_WRITE_BUDGET` of 45000. `GITHUB_REPOSITORY` must remain the exact repository slug. Set `TELEGRAM_ACCOUNT_SYNC_ENABLED=true` only after these checks. This does not enable the owner's control row by itself.
+5. Configure repository variables `TELEGRAM_CONTEXT_BROKER_URL` (this Worker's HTTPS origin) and the same audience. Keep `TELEGRAM_CONTEXT_SYNC_ENABLED=false` while preparing. No new permanent Worker ingest token is needed.
+6. Review/merge the feature, deploy the Worker, explicitly confirm the owner's account in the authenticated Mini App, then enable the repository gate. First use a manual workflow run and verify metadata counts and progress without printing message bodies. Only then leave the 15-minute schedule enabled. Existing webhooks and crons need no replacement.
+7. Test pause/restart, a selected old chat, a new message, an edit, a deletion and a separately consented expiring share. Revoke the test share afterwards. A partially loaded history is not a successful full-account test.
+
+Current implementation pauses safely on update gaps and inaccessible histories. Automatic full reconciliation after `DifferenceTooLong`, physical range purges, and recovery after lost chat permissions are not implemented. Gap markers block affected private reads and both new and previously issued context links; metadata stays visible. Do not clear a marker or reset a baseline and call it reconciliation. Large archives can also exhaust the free storage or write budget before completion. These limitations must be reviewed before production activation, not concealed as a completed integration.
+
+Rollback: disable the repository gate, pause the archive in the Mini App, and set the Worker feature flag false. Revoke the dedicated device in Telegram Settings / Devices to revoke the session itself. Do not drop databases or permanently delete archives without a separate owner decision.
 
 ## Privacy And Terms
 

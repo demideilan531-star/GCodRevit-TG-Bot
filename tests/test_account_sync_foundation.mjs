@@ -8,15 +8,16 @@ import { createContextFixture, CONTEXT_OWNER, CONTEXT_CHAT } from './context-db-
 import { createSqliteD1 } from './sport-db-fixture.mjs';
 
 const require = createRequire(new URL('../cloudflare-worker/package.json', import.meta.url));
-const { SignJWT, generateKeyPair } = await import(pathToFileURL(require.resolve('jose')).href);
+const { SignJWT, UnsecuredJWT, createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair } = await import(pathToFileURL(require.resolve('jose')).href);
 const { privateKey, publicKey } = await generateKeyPair('RS256');
+const publicJwk = { ...await exportJWK(publicKey), kid: 'fictional-primary', alg: 'RS256', use: 'sig' };
 const env = {
   GITHUB_REPOSITORY: 'fictional-owner/fictional-repository',
   TELEGRAM_CONTEXT_REPOSITORY_ID: '910001',
   TELEGRAM_CONTEXT_OIDC_AUDIENCE: 'https://context.example.test/internal/account-sync',
 };
 
-async function signedJob(overrides = {}, { key = privateKey, alg = 'RS256', omit = [] } = {}) {
+async function signedJob(overrides = {}, { key = privateKey, alg = 'RS256', omit = [], header = {} } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     iss: 'https://token.actions.githubusercontent.com', aud: env.TELEGRAM_CONTEXT_OIDC_AUDIENCE,
@@ -27,8 +28,16 @@ async function signedJob(overrides = {}, { key = privateKey, alg = 'RS256', omit
     ...overrides,
   };
   for (const name of omit) delete payload[name];
-  const jwt = await new SignJWT(payload).setProtectedHeader({ alg }).sign(key);
+  const jwt = await new SignJWT(payload).setProtectedHeader({ alg, ...header }).sign(key);
   return new Request('https://context.example.test/internal/account-sync', { headers: { Authorization: `Bearer ${jwt}` } });
+}
+
+function offline(t) {
+  t.mock.method(globalThis, 'fetch', () => assert.fail('OIDC foundation tests must never use a network JWKS'));
+}
+
+function requestWithToken(token, scheme = 'Bearer') {
+  return new Request('https://context.example.test/internal/account-sync', { headers: { Authorization: `${scheme} ${token}` } });
 }
 
 test('account sync OIDC accepts only the signed, configured workflow identity', async () => {
@@ -63,6 +72,140 @@ test('account sync OIDC rejects expiry, missing claims, forged signatures and mi
   }
   assert.equal(await verifyContextJob(new Request('https://context.example.test'), env, publicKey), null);
   assert.equal(await verifyContextJob(new Request('https://context.example.test', { headers: { Authorization: `Bearer ${'A'.repeat(17000)}` } }), env, publicKey), null);
+});
+
+test('account sync OIDC uses injected local JWKS and selects the exact signing kid without network', async t => {
+  offline(t);
+  const other = await generateKeyPair('RS256');
+  const secondary = { ...await exportJWK(other.publicKey), kid: 'fictional-secondary', alg: 'RS256', use: 'sig' };
+  const resolve = createLocalJWKSet({ keys: [secondary, publicJwk] });
+  const calls = [];
+  const keySet = async (...args) => { calls.push(args[0]); return resolve(...args); };
+  const request = await signedJob({}, { header: { kid: publicJwk.kid } });
+  assert.deepEqual(await verifyContextJob(request, env, keySet), { run: '920001:1' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].kid, publicJwk.kid);
+  assert.equal(calls[0].alg, 'RS256');
+  assert.equal(await verifyContextJob(await signedJob({}, { header: { kid: 'fictional-unknown' } }), env, keySet), null);
+  assert.equal(await verifyContextJob(await signedJob({}, { key: other.privateKey, header: { kid: publicJwk.kid } }), env, keySet), null);
+  assert.deepEqual(await verifyContextJob(await signedJob({}, { key: other.privateKey, header: { kid: secondary.kid } }), env, keySet), { run: '920001:1' });
+});
+
+test('account sync OIDC fails closed for unusable, ambiguous or malformed injected JWKS', async t => {
+  offline(t);
+  const request = await signedJob({}, { header: { kid: publicJwk.kid } });
+  for (const keys of [
+    [], [{ ...publicJwk, kid: 'fictional-other' }],
+    [{ ...publicJwk, alg: 'RS512' }], [{ ...publicJwk, use: 'enc' }],
+    [{ ...publicJwk, key_ops: ['encrypt'] }],
+    [publicJwk, { ...publicJwk }],
+    [{ kty: 'EC', kid: publicJwk.kid, crv: 'P-256', x: 'invalid', y: 'invalid', alg: 'RS256' }],
+  ]) {
+    assert.equal(await verifyContextJob(request, env, createLocalJWKSet({ keys })), null);
+  }
+  for (const malformed of [{}, { keys: null }, { keys: 'not-an-array' }]) {
+    const keySet = (...args) => createLocalJWKSet(malformed)(...args);
+    assert.equal(await verifyContextJob(request, env, keySet), null);
+  }
+});
+
+test('account sync OIDC ignores attacker-supplied key URLs and embedded keys instead of changing trust roots', async t => {
+  offline(t);
+  const attacker = await generateKeyPair('RS256');
+  const attackerJwk = { ...await exportJWK(attacker.publicKey), kid: 'fictional-attacker' };
+  const keySet = createLocalJWKSet({ keys: [publicJwk] });
+  const untrustedHeaders = {
+    kid: publicJwk.kid, jku: 'https://untrusted.example.test/jwks.json',
+    x5u: 'https://untrusted.example.test/certificate', jwk: attackerJwk,
+  };
+  assert.equal(await verifyContextJob(await signedJob({}, { key: attacker.privateKey, header: untrustedHeaders }), env, keySet), null);
+  assert.deepEqual(await verifyContextJob(await signedJob({}, { header: untrustedHeaders }), env, keySet), { run: '920001:1' });
+});
+
+test('account sync OIDC returns only a run identity and neither logs nor throws resolver failures', async t => {
+  offline(t);
+  const request = await signedJob({}, { header: { kid: publicJwk.kid } });
+  const logs = [];
+  for (const method of ['log', 'warn', 'error']) t.mock.method(console, method, (...args) => logs.push(args));
+  const failure = new Error('Fictional JWKS outage; this text must not be logged');
+  for (const keySet of [async () => { throw failure; }, () => { throw failure; }, async () => null]) {
+    assert.equal(await verifyContextJob(request, env, keySet), null);
+  }
+  const verified = await verifyContextJob(await signedJob({
+    arbitrary_private_field: 'Fictional metadata must not become receiver authorization', owner_id: '999999',
+  }), env, createLocalJWKSet({ keys: [publicJwk] }));
+  assert.deepEqual(verified, { run: '920001:1' });
+  assert.deepEqual(logs, []);
+});
+
+test('account sync OIDC rejects missing identity claims and malformed numeric dates with a real local signature', async t => {
+  offline(t);
+  const keySet = createLocalJWKSet({ keys: [publicJwk] });
+  for (const claim of ['iss', 'aud', 'repository', 'repository_id', 'ref', 'workflow_ref', 'event_name', 'run_id', 'run_attempt']) {
+    assert.equal(await verifyContextJob(await signedJob({}, { omit: [claim], header: { kid: publicJwk.kid } }), env, keySet), null, claim);
+  }
+  for (const overrides of [
+    { exp: '9999999999' }, { exp: null }, { iat: 'now' }, { iat: null },
+    { nbf: '0' }, { nbf: null }, { aud: [] }, { aud: ['foreign-audience'] },
+    { repository_id: 910001 }, { ref: 'refs/tags/main' }, { ref: 'refs/pull/1/merge' },
+    { workflow_ref: `${env.GITHUB_REPOSITORY}/.github/workflows/telegram-context-sync.yml@refs/heads/feature` },
+    { event_name: 'push' }, { event_name: 'workflow_run' }, { run_id: '-1' }, { run_attempt: '1.5' },
+  ]) {
+    assert.equal(await verifyContextJob(await signedJob(overrides, { header: { kid: publicJwk.kid } }), env, keySet), null, JSON.stringify(overrides));
+  }
+});
+
+test('account sync OIDC enforces age, not-before, expiry skew and maximum issued lifetime deterministically', async t => {
+  offline(t);
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-26T09:00:00.000Z') });
+  const now = Date.now() / 1000;
+  const keySet = createLocalJWKSet({ keys: [publicJwk] });
+  for (const overrides of [
+    { iat: now - 631, nbf: now - 631, exp: now + 100 },
+    { nbf: now + 31 }, { iat: now + 31 },
+    { iat: now - 100, nbf: now - 100, exp: now - 30 },
+    { iat: now, exp: now + 901 },
+  ]) assert.equal(await verifyContextJob(await signedJob(overrides, { header: { kid: publicJwk.kid } }), env, keySet), null, JSON.stringify(overrides));
+  for (const overrides of [
+    { iat: now - 100, nbf: now - 100, exp: now - 29 },
+    { nbf: now + 29 }, { iat: now, exp: now + 900 },
+  ]) assert.deepEqual(await verifyContextJob(await signedJob(overrides, { header: { kid: publicJwk.kid } }), env, keySet), { run: '920001:1' });
+});
+
+test('account sync OIDC rejects unsigned, corrupted, alternate-algorithm and non-Bearer tokens offline', async t => {
+  offline(t);
+  const keySet = createLocalJWKSet({ keys: [publicJwk] });
+  const signed = await signedJob({}, { header: { kid: publicJwk.kid } });
+  const token = signed.headers.get('Authorization').slice(7);
+  const [header, payload, signature] = token.split('.');
+  const changedPayload = Buffer.from(JSON.stringify({ ...decodeJwt(token), repository_id: '910002' })).toString('base64url');
+  const changedSignature = `${signature[0] === 'A' ? 'B' : 'A'}${signature.slice(1)}`;
+  for (const malformed of [
+    '', 'not-a-jwt', `${header}.${payload}`, `${header}.${payload}.${signature}.extra`,
+    `${header}.${changedPayload}.${signature}`, `${header}.${payload}.${changedSignature}`,
+    new UnsecuredJWT(decodeJwt(token)).encode(),
+  ]) assert.equal(await verifyContextJob(requestWithToken(malformed), env, keySet), null);
+  const alternate = await generateKeyPair('PS256');
+  assert.equal(await verifyContextJob(await signedJob({}, { key: alternate.privateKey, alg: 'PS256' }), env, alternate.publicKey), null);
+  for (const scheme of ['Basic', 'bearer', 'Token']) assert.equal(await verifyContextJob(requestWithToken(token, scheme), env, keySet), null);
+});
+
+test('account sync OIDC missing configuration or invalid Authorization never invokes key resolution', async t => {
+  offline(t);
+  let calls = 0;
+  const keySet = async () => { calls++; return publicKey; };
+  const signed = await signedJob();
+  for (const field of Object.keys(env)) {
+    for (const value of [undefined, '']) {
+      assert.equal(await verifyContextJob(signed, { ...env, [field]: value }, keySet), null);
+    }
+  }
+  for (const authorization of ['', 'Basic fictional', `Bearer ${'A'.repeat(17000)}`]) {
+    assert.equal(await verifyContextJob(new Request('https://context.example.test/internal/account-sync', {
+      headers: { Authorization: authorization },
+    }), env, keySet), null);
+  }
+  assert.equal(calls, 0);
 });
 
 test('draft account schema isolates old archive records from Secretary retention and keeps deduplication keys', t => {

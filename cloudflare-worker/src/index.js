@@ -26,6 +26,7 @@ import {
 import { handleBriefingBrokerApi, runScheduledBriefing } from "./briefing-jobs.js";
 import { BUTTON_SPORT, handleSportApi, handleSportUpdate, runSportReminders } from "./sport.js";
 import { runSportSheetExports } from "./sport-sheets.js";
+import { handleAccountSyncApi } from "./account-context.js";
 
 const BUTTON_GMAIL = "📬 Отчёт Gmail";
 const BUTTON_PERSONAL_GMAIL = "📬 Моя почта";
@@ -1010,6 +1011,8 @@ export default {
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const accountSyncResponse = await handleAccountSyncApi(request, env);
+    if (accountSyncResponse) return accountSyncResponse;
     const sportResponse = await handleSportApi(request, env);
     if (sportResponse) return sportResponse;
     const briefingResponse = await handleBriefingBrokerApi(request, env, { telegramApi, collectBriefingTasks, keyboard: role => keyboard(role, env.SPORT_ENABLED === "true") });

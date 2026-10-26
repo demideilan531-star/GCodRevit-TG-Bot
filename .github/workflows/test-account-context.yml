@@ -1,0 +1,48 @@
+name: Account Context Offline Tests
+
+on:
+  pull_request:
+    paths:
+      - 'cloudflare-worker/**'
+      - 'scripts/telegram_account_*.py'
+      - 'scripts/telegram-account-requirements.txt'
+      - 'tests/**'
+      - '.github/workflows/test-account-context.yml'
+      - '.github/workflows/telegram-context-sync.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare-worker/**'
+      - 'scripts/telegram_account_*.py'
+      - 'scripts/telegram-account-requirements.txt'
+      - 'tests/**'
+      - '.github/workflows/test-account-context.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '9.10.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned test dependencies
+        run: |
+          pnpm --dir cloudflare-worker install --frozen-lockfile
+          python -m pip install --disable-pip-version-check -r scripts/telegram-account-requirements.txt
+      - name: Worker, privacy and frontend regression tests
+        run: node --test tests/test_*.mjs
+      - name: Python regression tests with synthetic Telegram clients
+        run: python -B -m unittest discover -s tests -p 'test_*.py'
