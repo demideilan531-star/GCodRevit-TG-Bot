@@ -158,8 +158,9 @@ reconciliation flag. The runner refuses archive reads on a later claim containin
 one. Only deliberate owner/operator reconciliation may clear it. Backend enforcement
 must deny affected private message reads, exports and new/existing account-archive
 shares while the source-wide flag or affected chat's paused state applies; a status
-label alone is not sufficient. Backend authorization/read guards remain separate
-integration work and are not implemented by this Python client's tests.
+label alone is not sufficient. The Worker implements these guards in
+`src/account-visibility.js`; backend regression tests exercise them separately from
+this Python client's tests.
 
 ## Local Bootstrap, Not Yet Used
 
@@ -215,7 +216,8 @@ disabling the workflow does not revoke a Telegram session.
   cloud history, attachments, stories and separate saved-topic subdialogs are not
   recovered. No send/join/read-ack/profile RPC is permitted by the runner.
 - No automatic export to AI, public links, session brokering, deployment, commit or
-  push is performed. Context-specific sharing/consent remains backend/UI work.
+  push is performed by the client. Context-specific sharing/consent is implemented
+  separately in the authenticated backend/UI and is never initiated by this runner.
 
 Primary implementation references: [Telethon 1.45.0](https://pypi.org/project/Telethon/1.45.0/),
 [Telethon client API](https://docs.telethon.dev/en/stable/modules/client.html),
