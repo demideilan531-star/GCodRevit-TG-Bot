@@ -41,7 +41,7 @@ jobs:
       - name: Install pinned test dependencies
         run: |
           pnpm --dir cloudflare-worker install --frozen-lockfile
-          python -m pip install --disable-pip-version-check -r scripts/telegram-account-requirements.txt
+          python -m pip install --disable-pip-version-check -r scripts/telegram-account-requirements.txt Pillow==12.3.0
       - name: Worker, privacy and frontend regression tests
         run: node --test tests/test_*.mjs
       - name: Python regression tests with synthetic Telegram clients
