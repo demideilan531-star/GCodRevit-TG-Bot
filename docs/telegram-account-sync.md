@@ -14,6 +14,11 @@ The client code must not send messages, join chats, change profile or message st
 
 ## Components
 
+The separate continuous-service implementation and its still-pending activation
+gates are documented in `docs/telegram-account-service.md`. It reuses the broker
+and UI below but does not require Actions OIDC. Service authentication is disabled
+unless explicitly configured; it does not remove the owner-consent requirement.
+
 - An official, owner-created Telegram API application; the account owner enters login codes and any 2FA password outside this chat.
 - A mature Telethon client, pinned to a verified release, with no custom MTProto implementation.
 - Resumable, budget-limited background synchronization in the existing GitHub Actions project. Scheduled runs can be delayed and are not a real-time transport. The existing Secretary webhook continues receiving eligible new private-chat messages.

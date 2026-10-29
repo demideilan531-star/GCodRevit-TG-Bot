@@ -1,0 +1,31 @@
+services:
+  collector:
+    build:
+      context: ../..
+      dockerfile: deploy/account-collector/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+    tmpfs: [/tmp:size=16m,mode=1777]
+    ports: ["127.0.0.1:8088:8080"]
+    environment:
+      TELEGRAM_API_ID_FILE: /run/secrets/api_id
+      TELEGRAM_API_HASH_FILE: /run/secrets/api_hash
+      TELEGRAM_USER_SESSION_FILE: /run/secrets/user_session
+      TELEGRAM_ACCOUNT_SERVICE_SECRET_FILE: /run/secrets/service_secret
+      TELEGRAM_ACCOUNT_OWNER_ID: "1839693017"
+      TELEGRAM_ACCOUNT_SERVICE_ID: gcod-account-collector
+      TELEGRAM_CONTEXT_BROKER_URL: https://gcodrevit-telegram-bot.demideilan531.workers.dev
+    secrets: [api_id, api_hash, user_session, service_secret]
+secrets:
+  api_id:
+    file: ${GCOD_CREDENTIALS_DIR:?Set an absolute private directory outside the repository}/api_id
+  api_hash:
+    file: ${GCOD_CREDENTIALS_DIR:?Set an absolute private directory outside the repository}/api_hash
+  user_session:
+    file: ${GCOD_CREDENTIALS_DIR:?Set an absolute private directory outside the repository}/user_session
+  service_secret:
+    file: ${GCOD_CREDENTIALS_DIR:?Set an absolute private directory outside the repository}/service_secret

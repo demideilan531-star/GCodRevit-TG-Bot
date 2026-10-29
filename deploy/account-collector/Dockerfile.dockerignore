@@ -1,0 +1,8 @@
+**
+!scripts/
+!scripts/telegram-account-requirements.txt
+!scripts/telegram_account_sync.py
+!scripts/telegram_account_service.py
+!deploy/
+!deploy/account-collector/
+!deploy/account-collector/Dockerfile

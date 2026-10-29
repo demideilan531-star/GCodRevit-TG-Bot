@@ -20,6 +20,7 @@ from urllib.error import HTTPError
 from telethon import errors, functions as f, types as t
 from scripts import telegram_account_sync as s
 from scripts import telegram_account_login as login
+from scripts import telegram_account_service as service
 
 
 DATE = datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -141,6 +142,10 @@ class FakeTransport:
             rows = [{key: self.chats[cid][key] for key in keys if key in self.chats[cid]}
                     for cid in selected]
             return self.response(dict(chats=rows, next_chat_id=selected[-1] if len(ids) > 200 else None))
+        if endpoint == 'heartbeat':
+            if not self.lease_active:
+                return 409, b''
+            return self.response({'ok': True, 'quota_remaining': self.quota})
         if endpoint == "finish":
             assert set(body) <= {"lease_id", "generation", "status", "retry_after_seconds", "chat_id"}
             if (not self.lease_active or body.get("lease_id") != "fake-lease" or
@@ -303,6 +308,63 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         self.runner.update = {"v": 1, "global": copy.deepcopy(GLOBAL)}
         self.runner.chats = copy.deepcopy(chats or {})
         self.transport.chats = copy.deepcopy(self.runner.chats)
+
+    async def test_service_reuses_connection_and_peers_across_bounded_leases(self):
+        self.client.entities = [user(2)]
+        config = service.ServiceConfig(1, 'a' * 32, 'synthetic-session', 1,
+                                       'https://synthetic.invalid', 'fictional-collector', '1' * 64)
+        collector = service.Collector(config, self.client, self.transport, self.clock)
+        original_budget = s.Budget
+        with patch.object(s, 'Budget', lambda **kwargs: original_budget(80, clock=self.clock, sleep=self.clock.sleep)):
+            self.assertEqual((await collector.cycle())[0], 'idle')
+            before = sum(isinstance(c, f.messages.GetDialogsRequest) for c in self.client.calls)
+            self.assertGreater(before, 0)
+            self.assertEqual((await collector.cycle())[0], 'idle')
+        after = sum(isinstance(c, f.messages.GetDialogsRequest) for c in self.client.calls)
+        self.assertEqual(before, after)
+        self.assertNotIn('disconnect', self.client.calls)
+        self.assertEqual(self.transport.finish['status'], 'idle')
+        self.assertTrue(all(h['Authorization'].startswith('Context-HMAC ') for _, _, h in self.transport.requests))
+
+    async def test_service_checks_live_updates_between_history_pages(self):
+        self.client.entities = [user(ident) for ident in range(2, 6)]
+        order = []
+        def old_page(request):
+            order.append('history')
+            self.clock.now += 12
+            return history(message(1, t.PeerUser(request.peer.user_id)))
+        def live_page(request):
+            order.append('live')
+            return t.updates.DifferenceEmpty(DATE, 1)
+        self.client.handlers[f.messages.GetHistoryRequest] = old_page
+        self.client.handlers[f.updates.GetDifferenceRequest] = live_page
+        runner = service.ServiceRunner(self.tg, self.broker, 1, self.budget, live_interval=10)
+        self.assertEqual(await runner.run(), 'idle')
+        start = order.index('history')
+        self.assertEqual(order[start:start + 4], ['history', 'live', 'history', 'live'])
+        self.assertEqual(len(self.transport.messages), 4)
+
+    async def test_service_history_reserve_does_not_stop_live_polling(self):
+        self.transport.quota = 20000
+        self.client.entities = [user(2)]
+        runner = service.ServiceRunner(self.tg, self.broker, 1, self.budget, live_interval=10)
+        self.assertEqual(await runner.run(), 'idle')
+        self.assertFalse(any(isinstance(c, f.messages.GetHistoryRequest) for c in self.client.calls))
+        self.assertGreater(sum(isinstance(c, f.updates.GetDifferenceRequest) for c in self.client.calls), 10)
+        self.assertGreater(self.transport.quota, 18000)
+
+    async def test_service_uses_committed_progress_after_connection_restart(self):
+        self.client.entities = [user(2)]
+        runner = service.ServiceRunner(self.tg, self.broker, 1, self.budget)
+        self.assertEqual(await runner.run(), 'idle')
+        first_state = copy.deepcopy(self.transport.state)
+        budget = s.Budget(80, clock=self.clock, sleep=self.clock.sleep)
+        broker = s.Broker('https://synthetic.invalid', self.tokens, self.transport, budget)
+        client = FakeClient([user(2)])
+        resumed = service.ServiceRunner(s.ReadOnlyTelegram(client, 1, budget), broker, 1, budget)
+        self.assertEqual(await resumed.run(), 'idle')
+        self.assertEqual(first_state, self.transport.state)
+        self.assertFalse(any(isinstance(c, f.messages.GetHistoryRequest) for c in client.calls))
 
     async def test_owner_mismatch_does_not_read(self):
         self.client.me = user(99)

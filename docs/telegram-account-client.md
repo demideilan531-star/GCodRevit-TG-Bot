@@ -7,6 +7,11 @@ someone else's application credentials to evade that restriction.
 
 ## Files And Verification
 
+For the separate always-running Linux service transport, see
+`docs/telegram-account-service.md`. The Actions runner below stays available as a
+bounded scheduled alternative, not as a 24/7 process. Neither mode is enabled in
+production yet.
+
 - `scripts/telegram_account_sync.py`: non-interactive read-only runner.
 - `scripts/telegram_account_login.py`: separately invoked, local QR bootstrap.
 - `scripts/telegram-account-requirements.txt`: Telethon 1.45.0 and pinned dependencies.

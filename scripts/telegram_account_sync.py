@@ -253,7 +253,7 @@ class Broker:
         self.tokens, self.transport, self.budget = tokens, transport, budget
 
     async def post(self, endpoint, body, finishing=False):
-        if endpoint not in ("claim", "state", "batch", "finish"):
+        if endpoint not in ("claim", "state", "batch", "finish", "heartbeat"):
             raise SafeError("invalid_endpoint")
         data = json_bytes(body)  # Frozen bytes, including batch_id, for every retry.
         if len(data) > MAX_JSON:
@@ -261,15 +261,17 @@ class Broker:
         refreshed = False
         for attempt in range(4):
             self.budget.check(2 if finishing else 15)
-            token = await self.tokens.get()
+            url = self.origin + "/internal/account-context/" + endpoint
+            signer = getattr(self.tokens, "headers", None)
+            headers = (signer(url, data) if signer else
+                       {"Authorization": "Bearer " + await self.tokens.get()})
             try:
                 status, response = await self.transport.request(
-                    "POST", self.origin + "/internal/account-context/" + endpoint,
-                    {"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                    "POST", url, {**headers, "Content-Type": "application/json"},
                     data, min(10, max(1, self.budget.remaining() - 1)))
             except HttpFailure:
                 status, response = 0, b""
-            if status == 401 and not refreshed:
+            if status == 401 and not refreshed and not signer:
                 await self.tokens.get(force=True)
                 refreshed = True
                 continue
@@ -489,7 +491,7 @@ class Config:
 
 
 class Runner:
-    def __init__(self, telegram, broker, owner, budget):
+    def __init__(self, telegram, broker, owner, budget, live_interval=None):
         self.tg, self.broker, self.owner, self.budget = telegram, broker, owner, budget
         self.lease = None
         self.generation = None
@@ -501,6 +503,16 @@ class Runner:
         self.update = {"v": 1}
         self.cursor = None
         self._gap_finish_body = None
+        self.live_interval = live_interval
+        self.last_live_check = budget.clock()
+        self.retry_after_seconds = None
+        self.last_http_status = None
+
+    async def live_tick(self):
+        if (self.live_interval is not None and 'global' in self.update and
+                self.budget.clock() - self.last_live_check >= self.live_interval):
+            self.last_live_check = self.budget.clock()
+            await self.global_difference()
 
     async def batch(self, **parts):
         self.budget.check()
@@ -643,6 +655,7 @@ class Runner:
                 await self.batch(state=dict(dialogs_complete=done,
                                             dialog_cursor={} if done else next_cursor))
             cursor = next_cursor
+            await self.live_tick()
 
     async def refresh_metadata(self):
         # /state deliberately omits titles/archive flags. A small rotating sweep
@@ -866,12 +879,17 @@ class Runner:
             if not sliced:
                 return
 
+    def history_allowed(self):
+        return True
+
     async def backfill(self):
         after = self.update.get("backfill_after_chat_id", "")
         ids = sorted(self.chats)
         ids = [cid for cid in ids if cid > after] + [cid for cid in ids if cid <= after]
         for cid in ids:
             self.budget.check()
+            if not self.history_allowed():
+                return
             row = self.chats[cid]
             if row.get("history_complete") or row.get("history_status") in ("unavailable", "paused"):
                 continue
@@ -903,14 +921,16 @@ class Runner:
                 raise SafeError("nonadvancing_history_page")
             rows.sort(key=lambda m: m["message_id"], reverse=True)
             await self.messages(rows, history_cid=cid, state={"update_state": update})
+            await self.live_tick()
 
-    async def run(self):
+    async def run(self, cached_generation=None):
         status, retry = "error", None
         try:
             claim = await self.broker.post("claim", {})
             if str(claim.get("owner_id")) != str(self.owner):
                 raise SafeError("broker_owner_mismatch")
             self.lease, self.generation = claim["lease_id"], claim["generation"]
+            cached = cached_generation == self.generation and bool(self.peers)
             self.quota = integer(claim.get("quota_remaining"))
             self.cursor = claim.get("dialog_cursor")
             self.update = state_size(claim.get("update_state") or {"v": 1})
@@ -923,20 +943,29 @@ class Runner:
                 value["global"] = self.global_state(await self.tg.rpc(functions.updates.GetStateRequest()))
                 await self.save_update(value)
             resumed = bool(self.cursor)
-            await self.discover()
+            if not cached or resumed:
+                await self.discover()
             if resumed:
                 # StringSession does not retain entity access hashes. Rehydrate
                 # prefix peers read-only; never serialize a Telethon entity.
                 await self.discover(hydrate_only=True)
-            await self.refresh_metadata()
+            if not cached or resumed:
+                await self.refresh_metadata()
             await self.global_difference()
             await self.backfill()
             await self.global_difference()
+            if self.live_interval is not None:
+                while True:
+                    await self.budget.wait(self.live_interval)
+                    await self.global_difference()
             status = "idle"  # Transport idle, not a declaration of history completion.
         except StopRun as exc:
             status, retry = exc.status, exc.retry_after_seconds
         except errors.FloodWaitError as exc:
             status, retry = "flood_wait", max(1, int(exc.seconds))
+        except HttpFailure as exc:
+            self.last_http_status = exc.status
+            status = "error"
         except (Exception, asyncio.CancelledError):
             status = "error"
         finally:
@@ -958,6 +987,7 @@ class Runner:
                 await self.tg.disconnect()
             except (Exception, asyncio.CancelledError):
                 status = "error"
+        self.retry_after_seconds = retry
         return status
 
 

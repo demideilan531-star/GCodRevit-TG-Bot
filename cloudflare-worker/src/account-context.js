@@ -1,5 +1,6 @@
 import { adminIdSet } from './access.js';
 import { verifyContextJob } from './github-oidc.js';
+import { isAccountServiceRequest, verifyAccountService } from './account-service-auth.js';
 import { ACCOUNT_READABLE_SQL, accountVisibilityArgs, assertAccountChatReadable } from './account-visibility.js';
 import { ACCOUNT_SHARE_PREFIX, createContextShare, listContextShares, readContextShare, readShareRequest, revokeContextShare, sharedContextResponse } from './context-shares.js';
 
@@ -330,13 +331,22 @@ export async function handleAccountSyncApi(request, env, { verifyJob = verifyCon
   if (!path.startsWith(INTERNAL)) return null;
   if (request.method !== 'POST') return json({ error: 'Нужен POST.' }, 405);
   if (!configured(env)) return json({ error: 'Подключение аккаунта ещё не настроено.' }, 503);
-  const job = await verifyJob(request, env);
-  if (!job) return json({ error: 'Нет доступа.' }, 401);
   try {
+    const serviceRequest = isAccountServiceRequest(request);
+    const oidcJob = serviceRequest ? null : await verifyJob(request, env);
+    if (!serviceRequest && !oidcJob) return json({ error: 'Нет доступа.' }, 401);
+    if (serviceRequest && env.TELEGRAM_ACCOUNT_SERVICE_ENABLED !== 'true') return json({ error: 'Нет доступа.' }, 401);
     database(env);
     const { value, hash } = await readBody(request), suffix = path.slice(INTERNAL.length);
+    const job = serviceRequest ? await verifyAccountService(request, env, hash) : oidcJob;
+    if (!job) return json({ error: 'Нет доступа.' }, 401);
     if (suffix === 'claim') { record(value, []); return json(await claim(env, job)); }
     if (suffix === 'state') return json(await readState(env, value, job));
+    if (suffix === 'heartbeat') {
+      record(value, ['lease_id', 'generation']);
+      const row = await control(env); requireLease(row, value, job);
+      return json({ ok: true, quota_remaining: remaining(row, env) });
+    }
     if (suffix === 'batch') return json(await applyBatch(env, value, hash, job));
     if (suffix === 'finish') return json(await finish(env, value, job));
     return json({ error: 'Метод не найден.' }, 404);

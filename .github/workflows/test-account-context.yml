@@ -6,6 +6,7 @@ on:
       - 'cloudflare-worker/**'
       - 'scripts/telegram_account_*.py'
       - 'scripts/telegram-account-requirements.txt'
+      - 'deploy/account-collector/**'
       - 'tests/**'
       - '.github/workflows/test-account-context.yml'
       - '.github/workflows/telegram-context-sync.yml'
@@ -15,6 +16,7 @@ on:
       - 'cloudflare-worker/**'
       - 'scripts/telegram_account_*.py'
       - 'scripts/telegram-account-requirements.txt'
+      - 'deploy/account-collector/**'
       - 'tests/**'
       - '.github/workflows/test-account-context.yml'
 
@@ -46,3 +48,28 @@ jobs:
         run: node --test tests/test_*.mjs
       - name: Python regression tests with synthetic Telegram clients
         run: python -B -m unittest discover -s tests -p 'test_*.py'
+
+  collector-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build collector without any account credentials
+        run: docker build --pull -f deploy/account-collector/Dockerfile -t account-collector-offline-test .
+      - name: Verify image identity and fail-closed startup without network
+        shell: bash
+        run: |
+          test "$(docker image inspect --format '{{.Config.User}}' account-collector-offline-test)" = '10001:10001'
+          set +e
+          output="$(docker run --rm --network=none --read-only --cap-drop ALL --security-opt no-new-privileges:true account-collector-offline-test 2>&1)"
+          result=$?
+          set -e
+          test "$result" = 1
+          test "$output" = 'Account collector: setup_or_runtime_error'
+      - name: Verify isolated Python runtime imports and read-only RPC guard
+        run: |
+          docker run --rm --network=none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --entrypoint python account-collector-offline-test -B -c \
+            'import telegram_account_service as service; import telegram_account_sync as sync; from telethon import functions; assert sync.telethon_version == "1.45.0"; assert functions.messages.SendMessageRequest not in sync.READ_RPCS; assert service.retry_delay("error", retry=7201) == 7201'
