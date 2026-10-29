@@ -1,28 +1,49 @@
+import { buildContextMarkdown } from './markdown.js';
+
 const telegram = window.Telegram?.WebApp;
 const demoMode = new URLSearchParams(location.search).get('demo') === '1';
+const demoArchive = demoMode && new URLSearchParams(location.search).get('archive') === '1';
+const demoAnchor = Date.now();
 const demoShares = [];
-function demoMessages() {
-  const now = Date.now();
+let demoAccountEnabled = true;
+function demoMessages(chatId = '90001', archive = false) {
+  if (archive && chatId === '90003') return Array.from({ length: 245 }, (_, index) => ({ message_id: index + 1, chat_id: chatId, chat_title: 'Демо · Учебная группа', sender_name: 'Демо-участник', direction: 'incoming', content_type: 'text', body: `Вымышленная запись ${index + 1}`, sent_at: new Date(Date.UTC(2020, 0, 1) + index * 60000).toISOString() }));
+  const now = archive && chatId === '90002' ? Date.UTC(2018, 5, 12, 12) : demoAnchor;
   return [
-    { message_id: 1, chat_id: '90001', chat_title: 'Демо · Рабочий диалог', sender_name: 'Демо-собеседник', direction: 'incoming', content_type: 'text', body: 'Согласуем план на завтра?', sent_at: new Date(now - 600000).toISOString() },
-    { message_id: 2, chat_id: '90001', chat_title: 'Демо · Рабочий диалог', sender_name: 'Вы', direction: 'outgoing', content_type: 'text', body: 'Подготовлю список задач к встрече.', sent_at: new Date(now - 300000).toISOString() },
+    { message_id: 1, chat_id: chatId, chat_title: chatId === '90002' ? 'Демо · Старый диалог' : 'Демо · Рабочий диалог', sender_name: 'Демо-собеседник', direction: 'incoming', content_type: 'text', body: 'Согласуем план на завтра?', sent_at: new Date(now - 600000).toISOString() },
+    { message_id: 2, chat_id: chatId, chat_title: chatId === '90002' ? 'Демо · Старый диалог' : 'Демо · Рабочий диалог', sender_name: 'Вы', direction: 'outgoing', content_type: 'text', body: 'Подготовлю список задач к встрече.', sent_at: new Date(now - 300000).toISOString() },
   ];
 }
 function demoRequest(path, options = {}) {
   const url = new URL(`/api/context${path}`, location.origin);
-  if (url.pathname.endsWith('/chats')) return Response.json({ connected: true, retention_days: 30, chats: [{ chat_id: '90001', chat_title: 'Демо · Рабочий диалог', message_count: 2 }] });
-  if (url.pathname.endsWith('/messages')) return Response.json({ messages: demoMessages() });
-  if (url.pathname.endsWith('/export')) return new Response('# Вымышленный контекст\n\nДанные только для предпросмотра.');
+  const archive = url.pathname.includes('/account/');
+  if (url.pathname.endsWith('/account/status') || url.pathname.endsWith('/account/pause') || url.pathname.endsWith('/account/enable')) {
+    if (url.pathname.endsWith('/pause')) demoAccountEnabled = false;
+    if (url.pathname.endsWith('/enable')) demoAccountEnabled = true;
+    return Response.json({ available: demoArchive, can_setup: true, account_id: '99999', enabled: demoAccountEnabled, status: demoAccountEnabled ? 'idle' : 'paused', chats: 3, messages: 249, complete_chats: 3, dialogs_complete: true, last_sync_at: new Date(demoAnchor).toISOString() });
+  }
+  if (url.pathname.endsWith('/chats')) {
+    const chats = [{ chat_id: '90001', chat_title: 'Демо · Рабочий диалог', message_count: 2 }, ...(archive ? [{ chat_id: '90002', chat_title: 'Демо · Старый диалог', message_count: 2, archived: 1 }, { chat_id: '90003', chat_title: 'Демо · Учебная группа', message_count: 245 }] : [])];
+    const search = (url.searchParams.get('q') || '').toLowerCase();
+    return Response.json({ connected: true, retention_days: 30, next_chat_id: null, chats: chats.filter(chat => chat.chat_title.toLowerCase().includes(search)) });
+  }
+  if (url.pathname.endsWith('/messages')) {
+    let rows = demoMessages(url.searchParams.get('chat_id') || '90001', archive);
+    const before = url.searchParams.get('before');
+    if (before) { const cursor = JSON.parse(atob(before)); rows = rows.filter(row => row.message_id < cursor.message_id); }
+    const page = rows.slice(-200), next = rows.length > 200 ? btoa(JSON.stringify({ message_id: page[0].message_id, sent_at: page[0].sent_at })) : null;
+    return Response.json({ messages: page, next_cursor: next });
+  }
   if (url.pathname.endsWith('/shares') && options.method === 'POST') {
     const input = JSON.parse(options.body);
     let share = demoShares.find(row => row.id === input.id);
     if (!share) {
-      share = { id: input.id, chat_id: input.chat_id, message_limit: input.limit, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + input.ttl_hours * 3600000).toISOString(), url: `https://example.invalid/context-share/${input.id}.${'A'.repeat(43)}` };
+      share = { id: input.id, chat_id: input.chat_id, source: archive ? 'account' : 'secretary', message_limit: input.limit, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + input.ttl_hours * 3600000).toISOString(), url: `https://example.invalid/${archive ? 'account-context-share' : 'context-share'}/${input.id}.${'A'.repeat(43)}` };
       demoShares.push(share);
     }
     return Response.json({ share });
   }
-  if (url.pathname.endsWith('/shares')) return Response.json({ shares: demoShares });
+  if (url.pathname.endsWith('/shares')) return Response.json({ shares: demoShares.filter(share => share.chat_id === url.searchParams.get('chat_id') && share.source === (archive ? 'account' : 'secretary')) });
   if (url.pathname.includes('/shares/') && options.method === 'DELETE') {
     const index = demoShares.findIndex(row => row.id === url.pathname.split('/').at(-1));
     if (index >= 0) demoShares.splice(index, 1);
@@ -31,6 +52,15 @@ function demoRequest(path, options = {}) {
   throw new Error('В демо это действие недоступно.');
 }
 const state = {
+  source: 'secretary',
+  sourceChosen: false,
+  account: {},
+  streamStatus: {},
+  streamChats: [],
+  chatRequest: 0,
+  nextChatId: null,
+  nextCursor: null,
+  loadedSource: '',
   chats: [],
   messages: [],
   selectedChatId: "",
@@ -70,6 +100,18 @@ const elements = {
   createShareButton: document.querySelector("#createShareButton"),
   shareRetry: document.querySelector("#shareRetry"),
   demoBanner: document.querySelector("#demoBanner"),
+  accountPanel: document.querySelector('#accountPanel'),
+  accountTitle: document.querySelector('#accountTitle'),
+  accountDetail: document.querySelector('#accountDetail'),
+  accountToggle: document.querySelector('#accountToggle'),
+  sourceSwitch: document.querySelector('#sourceSwitch'),
+  streamSource: document.querySelector('#streamSource'),
+  archiveSource: document.querySelector('#archiveSource'),
+  chatSearch: document.querySelector('#chatSearch'),
+  moreChatsButton: document.querySelector('#moreChatsButton'),
+  olderButton: document.querySelector('#olderButton'),
+  accountShareConsent: document.querySelector('#accountShareConsent'),
+  shareConsent: document.querySelector('#shareConsent'),
 };
 
 let toastTimer;
@@ -120,6 +162,34 @@ function formatDate(value) {
 
 function selectedChat() {
   return state.chats.find((chat) => String(chat.chat_id) === state.selectedChatId) || null;
+}
+
+function sourcePath(path, source = state.source) { return source === 'account' ? `/account${path}` : path; }
+function renderAccount() {
+  const account = state.account;
+  elements.accountPanel.hidden = !account.can_setup && !account.available;
+  elements.sourceSwitch.hidden = !account.available;
+  elements.archiveSource.disabled = !account.available;
+  elements.streamSource.setAttribute('aria-pressed', String(state.source === 'secretary'));
+  elements.archiveSource.setAttribute('aria-pressed', String(state.source === 'account'));
+  elements.accountTitle.textContent = account.available ? (account.enabled ? 'Архив аккаунта подключён' : 'Синхронизация архива остановлена') : 'Архив аккаунта не подключён';
+  elements.accountDetail.textContent = account.available
+    ? `Чатов: ${account.chats || 0} · сообщений: ${account.messages || 0} · история: ${account.complete_chats || 0}/${account.chats || 0}${account.status === 'flood_wait' ? ' · пауза Telegram' : account.status === 'quota' ? ' · дневной лимит' : account.reconciliation_required ? ' · нужна повторная сверка' : account.status === 'error' ? ' · ошибка синхронизации' : ''}`
+    : 'Подключение и первоначальная загрузка ещё не завершены.';
+  elements.accountToggle.hidden = !account.available;
+  const command = account.enabled ? 'Остановить синхронизацию' : 'Включить синхронизацию';
+  elements.accountToggle.title = command; elements.accountToggle.setAttribute('aria-label', command);
+  elements.accountToggle.replaceChildren(); const icon = document.createElement('i'); icon.dataset.lucide = account.enabled ? 'pause' : 'play'; elements.accountToggle.append(icon); renderIcons();
+  if (state.source === 'account') {
+    elements.statusBand.classList.toggle('connected', Boolean(account.enabled));
+    elements.statusTitle.textContent = account.dialogs_complete ? 'Список чатов загружен' : 'Загрузка списка чатов';
+    elements.statusDetail.textContent = account.last_sync_at ? `Последняя синхронизация: ${formatDate(account.last_sync_at)}` : 'Первая синхронизация ещё не завершена';
+  } else {
+    const data = state.streamStatus;
+    elements.statusBand.classList.toggle('connected', data.connected === true);
+    elements.statusTitle.textContent = data.connected ? 'Secretary Mode подключён' : 'Secretary Mode не подключён';
+    elements.statusDetail.textContent = data.connected ? `Новые сообщения · хранение: ${data.retention_days} дней` : 'Ожидается подключение бота к Telegram-аккаунту';
+  }
 }
 
 function renderChats() {
@@ -177,17 +247,21 @@ function renderMessages() {
     }
   }
 
-  const enabled = Boolean(chat && state.messages.length && state.loadedChatId === state.selectedChatId);
+  const enabled = Boolean(chat && state.messages.length && state.loadedChatId === state.selectedChatId && state.loadedSource === state.source);
   elements.copyButton.disabled = !enabled;
   elements.downloadButton.disabled = !enabled;
   elements.shareButton.disabled = !enabled;
   elements.deleteButton.disabled = !chat;
+  elements.olderButton.hidden = state.source !== 'account' || !state.nextCursor;
 }
 
 async function loadMessages() {
   const requestId = ++state.messageRequest;
   const chatId = state.selectedChatId;
+  const source = state.source;
   state.loadedChatId = "";
+  state.loadedSource = '';
+  state.nextCursor = null;
   state.messages = [];
   state.markdown = "";
   renderMessages();
@@ -199,34 +273,64 @@ async function loadMessages() {
   }
   const query = new URLSearchParams({
     chat_id: chatId,
-    limit: elements.limitSelect.value,
+    limit: '200',
   });
-  const [messagesResponse, exportResponse] = await Promise.all([
-    api(`/messages?${query}`),
-    api(`/export?${query}`),
-  ]);
-  const messages = (await messagesResponse.json()).messages || [];
-  const markdown = await exportResponse.text();
-  if (requestId !== state.messageRequest || state.selectedChatId !== chatId) return;
-  state.messages = messages;
-  state.markdown = markdown;
+  const response = await api(sourcePath(`/messages?${query}`, source)), data = await response.json();
+  if (requestId !== state.messageRequest || state.selectedChatId !== chatId || state.source !== source) return;
+  state.messages = data.messages || [];
+  state.nextCursor = data.next_cursor || null;
+  state.markdown = buildContextMarkdown({ chatTitle: selectedChat()?.chat_title, chatId, messages: state.messages });
   state.loadedChatId = chatId;
+  state.loadedSource = source;
   renderMessages();
+}
+
+async function loadOlder() {
+  if (!state.nextCursor || state.source !== 'account' || elements.olderButton.disabled) return;
+  const requestId = state.messageRequest, chatId = state.selectedChatId, cursor = state.nextCursor;
+  elements.olderButton.disabled = true;
+  try {
+    const response = await api(`/account/messages?${new URLSearchParams({ chat_id: chatId, limit: '200', before: cursor })}`), data = await response.json();
+    if (state.source !== 'account' || state.selectedChatId !== chatId || state.messageRequest !== requestId) return;
+    const combined = [...(data.messages || []), ...state.messages];
+    state.messages = [...new Map(combined.map(row => [row.message_id, row])).values()];
+    state.nextCursor = data.next_cursor || null;
+    state.markdown = buildContextMarkdown({ chatTitle: selectedChat()?.chat_title, chatId, messages: state.messages });
+    renderMessages();
+  } catch (error) { showToast(error.message); }
+  finally { elements.olderButton.disabled = false; }
+}
+
+async function loadSourceChats({ append = false } = {}) {
+  const requestId = ++state.chatRequest, source = state.source;
+  const query = new URLSearchParams({ q: elements.chatSearch.value.trim() });
+  if (append && state.nextChatId) query.set('after', state.nextChatId);
+  let chats, next = null;
+  if (source === 'account') {
+    const response = await api(`/account/chats?${query}`), data = await response.json(); chats = data.chats || []; next = data.next_chat_id || null;
+  } else {
+    const search = elements.chatSearch.value.trim().toLowerCase();
+    chats = state.streamChats.filter(chat => chat.chat_title.toLowerCase().includes(search));
+  }
+  if (state.chatRequest !== requestId || source !== state.source) return;
+  state.chats = append ? [...new Map([...state.chats, ...chats].map(chat => [String(chat.chat_id), chat])).values()] : chats;
+  state.nextChatId = next; elements.moreChatsButton.hidden = !next;
+  const previous = state.selectedChatId; renderChats();
+  if (!append || previous !== state.selectedChatId) await loadMessages();
 }
 
 async function loadAll({ quiet = false } = {}) {
   if (!quiet) setLoading(true);
   try {
-    const response = await api("/chats");
-    const data = await response.json();
-    state.chats = data.chats || [];
-    elements.statusBand.classList.toggle("connected", data.connected === true);
-    elements.statusTitle.textContent = data.connected ? "Secretary Mode подключён" : "Secretary Mode не подключён";
-    elements.statusDetail.textContent = data.connected
-      ? `Хранение текста: ${data.retention_days} дней`
-      : "Ожидается подключение бота к Telegram-аккаунту";
-    renderChats();
-    await loadMessages();
+    const requestId = ++state.chatRequest;
+    const [streamResponse, accountResponse] = await Promise.all([api('/chats'), api('/account/status').catch(() => null)]);
+    const data = await streamResponse.json(), account = accountResponse ? await accountResponse.json() : { available: false };
+    if (requestId !== state.chatRequest) return;
+    state.streamStatus = data; state.streamChats = data.chats || []; state.account = account;
+    if (!account.available) state.source = 'secretary';
+    else if (!state.sourceChosen) state.source = 'account';
+    renderAccount();
+    await loadSourceChats();
   } catch (error) {
     elements.statusTitle.textContent = "Контекст недоступен";
     elements.statusDetail.textContent = error.message;
@@ -272,6 +376,8 @@ function setShareBusy(busy) {
   elements.shareTtl.disabled = busy;
   elements.closeShare.disabled = busy;
   elements.shareRetry.disabled = busy;
+  elements.limitSelect.disabled = busy;
+  elements.shareConsent.disabled = busy;
   for (const button of elements.shareList.querySelectorAll("button")) button.disabled = busy;
 }
 
@@ -279,10 +385,11 @@ function checkedShare(share, target) {
   if (!share || typeof share.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(share.id)) throw new Error('Нет подтверждения ссылки от сервера.');
   let url;
   try { url = new URL(share.url); } catch { throw new Error('Нет подтверждения ссылки от сервера.'); }
-  const parts = url.pathname.slice('/context-share/'.length).split('.');
+  const prefix = target.source === 'account' ? '/account-context-share/' : '/context-share/';
+  const parts = url.pathname.slice(prefix.length).split('.');
   const expectedOrigin = demoMode ? 'https://example.invalid' : location.origin;
   if (url.origin !== expectedOrigin || url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
-      !url.pathname.startsWith('/context-share/') || parts.length !== 2 || parts[0] !== share.id || !/^[A-Za-z0-9_-]{43}$/.test(parts[1]) ||
+      !url.pathname.startsWith(prefix) || parts.length !== 2 || parts[0] !== share.id || !/^[A-Za-z0-9_-]{43}$/.test(parts[1]) ||
       share.chat_id !== target.chat_id || !Number.isInteger(share.message_limit) || share.message_limit < 1 || share.message_limit > 200 ||
       !Number.isFinite(new Date(share.expires_at).getTime())) throw new Error("Нет подтверждения ссылки от сервера.");
   return share;
@@ -317,7 +424,7 @@ function renderShareLinks(shares) {
 }
 
 async function reloadShareLinks() {
-  const response = await shareApi(`/shares?${new URLSearchParams({ chat_id: state.shareTarget.chat_id })}`);
+  const response = await shareApi(sourcePath(`/shares?${new URLSearchParams({ chat_id: state.shareTarget.chat_id })}`, state.shareTarget.source));
   const data = await response.json();
   if (!Array.isArray(data.shares)) throw new Error("Не удалось получить ссылки.");
   renderShareLinks(data.shares.map(share => checkedShare(share, state.shareTarget)));
@@ -325,11 +432,14 @@ async function reloadShareLinks() {
 
 async function openShareDialog() {
   const chat = selectedChat();
-  if (!chat || !state.messages.length || state.loadedChatId !== state.selectedChatId) return;
-  state.shareTarget = { chat_id: state.selectedChatId, limit: Number(elements.limitSelect.value), title: chat.chat_title };
+  if (!chat || !state.messages.length || state.loadedChatId !== state.selectedChatId || state.loadedSource !== state.source) return;
+  state.shareTarget = { chat_id: state.selectedChatId, limit: 200, title: chat.chat_title, source: state.source };
   state.shareRequestId = crypto.randomUUID();
   elements.shareTarget.textContent = state.shareTarget.title;
-  elements.shareWarning.textContent = `Любой, у кого есть ссылка, сможет читать последние ${state.shareTarget.limit} сообщений этого чата, включая новые, до конца срока. Отзыв ссылки не удаляет уже скачанные копии.`;
+  elements.limitSelect.value = '200';
+  elements.shareConsent.checked = false;
+  elements.accountShareConsent.hidden = state.source !== 'account';
+  updateShareWarning();
   elements.shareError.hidden = true;
   elements.shareStatus.textContent = "";
   elements.shareTtl.value = "24";
@@ -340,14 +450,22 @@ async function openShareDialog() {
   finally { setShareBusy(false); }
 }
 
+function updateShareWarning() {
+  elements.shareWarning.textContent = `Любой, у кого есть ссылка, сможет читать последние ${state.shareTarget.limit} сообщений ${state.shareTarget.source === 'account' ? 'архива этого чата' : 'этого чата'}, включая новые, до конца срока. Отзыв ссылки не удаляет уже скачанные копии.`;
+}
+
 async function createShareLink(event) {
   event.preventDefault();
   if (state.shareBusy || !state.shareTarget) return;
+  if (state.shareTarget.source === 'account' && !elements.shareConsent.checked) {
+    elements.shareError.textContent = 'Нужно согласие участников на передачу выбранного контекста.'; elements.shareError.hidden = false; return;
+  }
   setShareBusy(true); elements.shareError.hidden = true; elements.shareStatus.textContent = "Создание…";
   let created = false;
   try {
-    const response = await shareApi("/shares", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+    const response = await shareApi(sourcePath('/shares', state.shareTarget.source), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
       id: state.shareRequestId, chat_id: state.shareTarget.chat_id, limit: state.shareTarget.limit, ttl_hours: Number(elements.shareTtl.value),
+      ...(state.shareTarget.source === 'account' ? { consent_confirmed: elements.shareConsent.checked } : {}),
     }) });
     const data = await response.json();
     const share = checkedShare(data.share, state.shareTarget);
@@ -365,7 +483,7 @@ async function revokeShareLink(id) {
   if (state.shareBusy) return;
   setShareBusy(true); elements.shareError.hidden = true;
   try {
-    await shareApi(`/shares/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await shareApi(sourcePath(`/shares/${encodeURIComponent(id)}`, state.shareTarget.source), { method: "DELETE" });
     elements.shareStatus.textContent = "Ссылка отключена"; state.shareRequestId = crypto.randomUUID();
     await reloadShareLinks();
   } catch (error) { elements.shareError.textContent = error.message; elements.shareError.hidden = false; }
@@ -390,11 +508,11 @@ function downloadMarkdown() {
 async function deleteChatContext() {
   const chat = selectedChat();
   if (!chat) return;
-  const confirmed = window.confirm(`Удалить сохранённый контекст чата «${chat.chat_title}»?`);
+  const confirmed = window.confirm(`Удалить ${state.source === 'account' ? 'сохранённый архив' : 'сохранённый поток новых сообщений'} чата «${chat.chat_title}»? Саму переписку в Telegram это не удалит.`);
   if (!confirmed) return;
   setLoading(true);
   try {
-    await api(`/chats/${encodeURIComponent(state.selectedChatId)}`, { method: "DELETE" });
+    await api(sourcePath(`/chats/${encodeURIComponent(state.selectedChatId)}`), { method: "DELETE" });
     state.selectedChatId = "";
     await loadAll({ quiet: true });
     telegram?.HapticFeedback?.notificationOccurred("success");
@@ -422,15 +540,39 @@ elements.chatSelect.addEventListener("change", async () => {
     setLoading(false);
   }
 });
-elements.limitSelect.addEventListener("change", async () => {
-  setLoading(true);
+elements.limitSelect.addEventListener('change', () => {
+  if (!state.shareTarget) return;
+  state.shareTarget.limit = Number(elements.limitSelect.value); state.shareRequestId = crypto.randomUUID(); updateShareWarning();
+});
+elements.olderButton.addEventListener('click', loadOlder);
+elements.moreChatsButton.addEventListener('click', async () => {
+  elements.moreChatsButton.disabled = true;
+  try { await loadSourceChats({ append: true }); } catch (error) { showToast(error.message); }
+  finally { elements.moreChatsButton.disabled = false; }
+});
+function switchSource(source) {
+  if (source === state.source || (source === 'account' && !state.account.available)) return;
+  state.source = source; state.sourceChosen = true; state.selectedChatId = ''; elements.chatSearch.value = ''; ++state.messageRequest; ++state.chatRequest;
+  loadAll();
+}
+elements.streamSource.addEventListener('click', () => switchSource('secretary'));
+elements.archiveSource.addEventListener('click', () => switchSource('account'));
+let searchTimer;
+elements.chatSearch.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  ++state.chatRequest;
+  searchTimer = setTimeout(() => loadSourceChats().catch(error => showToast(error.message)), 250);
+});
+elements.accountToggle.addEventListener('click', async () => {
+  const enable = !state.account.enabled;
+  if (enable && !window.confirm('Включить синхронизацию облачных чатов и истории подключённого аккаунта?')) return;
+  elements.accountToggle.disabled = true;
   try {
-    await loadMessages();
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    setLoading(false);
-  }
+    const response = await api(`/account/${enable ? 'enable' : 'pause'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(enable ? { confirmed: true, account_id: state.account.account_id } : {}) });
+    state.account = await response.json(); renderAccount();
+    showToast(enable ? 'Синхронизация включена' : 'Синхронизация остановлена');
+  } catch (error) { showToast(error.message); }
+  finally { elements.accountToggle.disabled = false; }
 });
 elements.refreshButton.addEventListener("click", () => loadAll());
 elements.copyButton.addEventListener("click", copyMarkdown);

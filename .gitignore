@@ -4,5 +4,8 @@ telegram-webhook-state.json
 .env
 __pycache__/
 *.py[cod]
+*.session
+*.session-*
+session.dpapi
 cloudflare-worker/node_modules/
 cloudflare-worker/.wrangler/
